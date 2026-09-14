@@ -24,6 +24,7 @@ import SidebarNavItem from '@/components/layout/SidebarNavItem';
 import SidebarMainNav from '@/components/layout/SidebarMainNav';
 import SidebarSettingsNav from '@/components/layout/SidebarSettingsNav';
 import SidebarBrandFooter from '@/components/brand/SidebarBrandFooter';
+import AvantAegisSidebarBrand from '@/components/brand/AvantAegisSidebarBrand';
 
 // The app sidebar. It has two modes driven by the route: the main work
 // navigation, and the project settings navigation reached through the "Project
@@ -67,6 +68,7 @@ export default function AppSidebar({
   return (
     <Sidebar collapsible="icon" side={side}>
       <SidebarHeader>
+        <AvantAegisSidebarBrand />
         <ProjectSwitcher
           projects={projects}
           currentProjectKey={currentProjectKey}
