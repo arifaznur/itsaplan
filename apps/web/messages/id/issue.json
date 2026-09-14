@@ -33,7 +33,11 @@
     "groupLabels": "Label",
     "groupCustom": "Bidang kustom",
     "empty": "Kosong",
-    "openInNewTab": "Buka di tab baru"
+    "openInNewTab": "Buka di tab baru",
+    "openInExplorer": "Open in Explorer",
+    "installExplorerConnector": "Install Explorer Connector",
+    "sharedPathPlaceholder": "\\\\server\\share\\folder or C:\\folder",
+    "invalidSharedPath": "Enter a valid UNC or absolute Windows path"
   },
   "menu": {
     "preview": "Pratinjau",

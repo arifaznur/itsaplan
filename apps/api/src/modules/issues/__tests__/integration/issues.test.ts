@@ -983,6 +983,44 @@ describe('issues', () => {
       expect(put.status).toBe(400);
     });
 
+    it('stores a UNC path in a shared path field', async () => {
+      const { asOwner, columnId } = await setupProject();
+      const field = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          ['custom-fields'].post({ name: 'Shared folder', fieldType: 'shared_path' })
+      ).data!;
+      const issue = (await createIssue(asOwner, columnId)).data!;
+      const path = String.raw`\\server\share\Project A\brief.docx`;
+
+      const put = await asOwner
+        .issues({ issueId: issue.id })
+        .fields({ fieldId: field.id })
+        .put({ value: path });
+
+      expect(put.status).toBe(200);
+      expect((await fieldValue(asOwner, issue.id, field.id))?.value).toBe(path);
+    });
+
+    it('stores an absolute drive path in a shared path field', async () => {
+      const { asOwner, columnId } = await setupProject();
+      const field = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          ['custom-fields'].post({ name: 'Shared folder', fieldType: 'shared_path' })
+      ).data!;
+      const issue = (await createIssue(asOwner, columnId)).data!;
+
+      const path = String.raw`C:\Users\staff\brief.docx`;
+      const put = await asOwner
+        .issues({ issueId: issue.id })
+        .fields({ fieldId: field.id })
+        .put({ value: path });
+
+      expect(put.status).toBe(200);
+      expect((await fieldValue(asOwner, issue.id, field.id))?.value).toBe(path);
+    });
+
     it('rejects an option id of another field and keeps the current selection', async () => {
       const { asOwner, columnId } = await setupProject();
       const customFields = asOwner.projects({ projectKey: 'MKT' })['custom-fields'];

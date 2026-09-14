@@ -4,6 +4,7 @@ export type CustomFieldType =
   | 'text'
   | 'markdown'
   | 'url'
+  | 'shared_path'
   | 'number'
   | 'boolean'
   | 'date'

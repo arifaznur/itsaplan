@@ -1068,7 +1068,7 @@ export const customField = pgTable(
   (t) => [
     check(
       'custom_field_field_type_check',
-      sql`${t.fieldType} IN ('text', 'markdown', 'url', 'number', 'boolean', 'date', 'datetime', 'datetime_range', 'select', 'multi_select', 'member')`,
+      sql`${t.fieldType} IN ('text', 'markdown', 'url', 'shared_path', 'number', 'boolean', 'date', 'datetime', 'datetime_range', 'select', 'multi_select', 'member')`,
     ),
     check(
       'custom_field_member_scope_check',

@@ -202,6 +202,17 @@ describe('custom-fields', () => {
       expect(slot.data).toMatchObject({ fieldType: 'datetime_range' });
     });
 
+    it('creates a shared path field', async () => {
+      const { asOwner } = await setupProject();
+      const result = await fields(asOwner).post({
+        name: 'Shared folder',
+        fieldType: 'shared_path',
+      });
+
+      expect(result.status).toBe(201);
+      expect(result.data).toMatchObject({ fieldType: 'shared_path' });
+    });
+
     it('rejects an unknown field type', async () => {
       const { asOwner } = await setupProject();
       const res = await fields(asOwner).post({

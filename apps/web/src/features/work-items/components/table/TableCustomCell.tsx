@@ -1,4 +1,4 @@
-import { Check, ExternalLink } from 'lucide-react';
+import { Check, ExternalLink, FolderOpen } from 'lucide-react';
 import type { CustomField } from '@/lib/api/endpoints/customFields';
 import type { Issue } from '@/lib/api/endpoints/issues';
 import { type Maps } from '@/utils/project';
@@ -6,6 +6,7 @@ import { formatDateTimeRange, formatShortDate } from '@/utils/dates';
 import Avatar from '@/components/common/Avatar';
 import { colorDot } from '@/components/common/fields/colorDot';
 import { MarkdownCell } from './MarkdownCell';
+import { explorerConnectorUrl } from '@/utils/windowsPath';
 
 const DASH = <span className="text-muted-foreground/40">—</span>;
 
@@ -88,6 +89,19 @@ export function TableCustomCell({
         className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
         <ExternalLink className="size-3 shrink-0" />
+        <span className="truncate">{preview(raw)}</span>
+      </a>
+    );
+  }
+  if (field.fieldType === 'shared_path') {
+    return (
+      <a
+        href={explorerConnectorUrl(String(raw))}
+        onClick={(event) => event.stopPropagation()}
+        className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        dir="ltr"
+      >
+        <FolderOpen className="size-3 shrink-0" />
         <span className="truncate">{preview(raw)}</span>
       </a>
     );

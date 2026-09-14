@@ -257,6 +257,7 @@
       "text": "teks",
       "markdown": "markdown",
       "url": "url",
+      "shared_path": "shared folder path",
       "number": "angka",
       "boolean": "kotak centang",
       "date": "tanggal",

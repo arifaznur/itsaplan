@@ -257,6 +257,7 @@
       "text": "текст",
       "markdown": "markdown",
       "url": "посилання",
+      "shared_path": "shared folder path",
       "number": "число",
       "boolean": "прапорець",
       "date": "дата",

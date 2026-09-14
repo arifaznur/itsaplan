@@ -33,7 +33,11 @@
     "groupLabels": "Метки",
     "groupCustom": "Свои поля",
     "empty": "Пусто",
-    "openInNewTab": "Открыть в новой вкладке"
+    "openInNewTab": "Открыть в новой вкладке",
+    "openInExplorer": "Open in Explorer",
+    "installExplorerConnector": "Install Explorer Connector",
+    "sharedPathPlaceholder": "\\\\server\\share\\folder or C:\\folder",
+    "invalidSharedPath": "Enter a valid UNC or absolute Windows path"
   },
   "menu": {
     "preview": "Предпросмотр",
