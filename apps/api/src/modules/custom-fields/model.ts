@@ -4,6 +4,7 @@ const fieldType = t.Union([
   t.Literal('text'),
   t.Literal('markdown'),
   t.Literal('url'),
+  t.Literal('shared_path'),
   t.Literal('number'),
   t.Literal('boolean'),
   t.Literal('date'),

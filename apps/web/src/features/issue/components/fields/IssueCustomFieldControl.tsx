@@ -16,6 +16,8 @@ import {
 import Avatar from '@/components/common/Avatar';
 import MemberSelect from './MemberSelect';
 import InlineUrlField from './InlineUrlField';
+import InlineSharedPathField from './InlineSharedPathField';
+import SharedPathLink from './SharedPathLink';
 import InlineTextField from './InlineTextField';
 import { useTranslations } from 'next-intl';
 
@@ -86,6 +88,14 @@ export default function IssueCustomFieldControl({
         <span className="text-sm">{formatDateTimeRange(String(v), current?.valueEnd ?? null)}</span>
       );
     }
+    if (def.fieldType === 'shared_path') {
+      return (
+        <span className="flex min-w-0 items-center gap-1 text-sm" dir="ltr">
+          <span className="truncate">{String(v)}</span>
+          <SharedPathLink value={String(v)} />
+        </span>
+      );
+    }
     return <span className="text-sm">{String(v)}</span>;
   }
 
@@ -107,6 +117,16 @@ export default function IssueCustomFieldControl({
         value={(current?.value as string | null) ?? null}
         saveKey={saveKey}
         onSave={(v) => onChange({ value: v })}
+      />
+    );
+  }
+
+  if (def.fieldType === 'shared_path') {
+    return (
+      <InlineSharedPathField
+        value={(current?.value as string | null) ?? null}
+        saveKey={saveKey}
+        onSave={(value) => onChange({ value })}
       />
     );
   }

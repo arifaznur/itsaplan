@@ -19,6 +19,7 @@ import DateTimePill from '@/components/common/fields/DateTimePill';
 import { Pill } from '@/components/common/fields/Pill';
 import MemberSelect from './MemberSelect';
 import { useTranslations } from 'next-intl';
+import { isWindowsPath } from '@/utils/windowsPath';
 
 // A pill + popover editor for a single non-markdown custom field, used in the
 // new-issue modal where the value is collected before the issue exists.
@@ -150,9 +151,11 @@ export default function IssueCustomFieldPill({
     );
   }
 
-  // text / number / url
+  // text / number / url / shared path
   const raw = value?.value;
   const hasValue = raw != null && raw !== '';
+  const invalidSharedPath =
+    def.fieldType === 'shared_path' && hasValue && !isWindowsPath(String(raw));
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -162,9 +165,14 @@ export default function IssueCustomFieldPill({
       </PopoverTrigger>
       <PopoverContent className="w-56 p-2" align="start">
         <Input
-          type={def.fieldType}
+          type={def.fieldType === 'shared_path' ? 'text' : def.fieldType}
           autoFocus
           value={raw != null ? String(raw) : ''}
+          aria-invalid={invalidSharedPath || undefined}
+          placeholder={
+            def.fieldType === 'shared_path' ? String.raw`\\server\share\folder` : undefined
+          }
+          dir={def.fieldType === 'shared_path' ? 'ltr' : undefined}
           onChange={(e) => {
             const s = e.target.value;
             if (s === '') onChange({ value: null });

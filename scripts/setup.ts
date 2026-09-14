@@ -401,8 +401,14 @@ if (mode === 'dev') {
   // Its pre-migration dump goes to BACKUP_DIR, a path only the api container has, and a
   // local database the operator recreates at will has nothing to go back to anyway.
   process.env.SKIP_PRE_MIGRATION_BACKUP = '1';
-  await run('bun', '--env-file=.env', 'packages/db/src/migrate.ts');
-  await run('bun', '--env-file=.env.test', 'packages/db/src/migrate.ts');
+  // setup.ts itself auto-loads .env. Bun does not let --env-file replace a variable
+  // already inherited by a child, so explicitly switch the connection for each run.
+  // Without this, both commands migrate the development database and leave the test
+  // database empty even though the setup reports success.
+  process.env.DATABASE_URL = env.get('DATABASE_URL');
+  await run('bun', 'packages/db/src/migrate.ts');
+  process.env.DATABASE_URL = test.get('DATABASE_URL');
+  await run('bun', 'packages/db/src/migrate.ts');
   migrations.stop(`Migrated ${database} and ${testDatabase}`);
 
   p.outro(

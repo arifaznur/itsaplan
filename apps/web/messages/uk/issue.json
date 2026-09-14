@@ -33,7 +33,11 @@
     "groupLabels": "Мітки",
     "groupCustom": "Власні поля",
     "empty": "Порожньо",
-    "openInNewTab": "Відкрити в новій вкладці"
+    "openInNewTab": "Відкрити в новій вкладці",
+    "openInExplorer": "Open in Explorer",
+    "installExplorerConnector": "Install Explorer Connector",
+    "sharedPathPlaceholder": "\\\\server\\share\\folder or C:\\folder",
+    "invalidSharedPath": "Enter a valid UNC or absolute Windows path"
   },
   "menu": {
     "preview": "Попередній перегляд",

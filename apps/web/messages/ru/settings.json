@@ -257,6 +257,7 @@
       "text": "текст",
       "markdown": "markdown",
       "url": "ссылка",
+      "shared_path": "shared folder path",
       "number": "число",
       "boolean": "флажок",
       "date": "дата",

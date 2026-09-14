@@ -33,7 +33,11 @@
     "groupLabels": "الوسوم",
     "groupCustom": "حقول مخصصة",
     "empty": "فارغ",
-    "openInNewTab": "فتح في تبويب جديد"
+    "openInNewTab": "فتح في تبويب جديد",
+    "openInExplorer": "Open in Explorer",
+    "installExplorerConnector": "Install Explorer Connector",
+    "sharedPathPlaceholder": "\\\\server\\share\\folder or C:\\folder",
+    "invalidSharedPath": "Enter a valid UNC or absolute Windows path"
   },
   "menu": {
     "preview": "معاينة",

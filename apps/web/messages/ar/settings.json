@@ -257,6 +257,7 @@
       "text": "نص",
       "markdown": "markdown",
       "url": "رابط",
+      "shared_path": "shared folder path",
       "number": "رقم",
       "boolean": "مربع اختيار",
       "date": "تاريخ",

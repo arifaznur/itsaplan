@@ -1428,6 +1428,13 @@ function isHttpUrl(value: string): boolean {
   return url.protocol === 'http:' || url.protocol === 'https:';
 }
 
+function isWindowsPath(value: string): boolean {
+  if (value.includes('\0') || value.includes('\r') || value.includes('\n')) return false;
+  return /^(?:\\\\[^\\/:*?"<>|]+\\[^\\/:*?"<>|]+(?:\\[^:*?"<>|]*)*|[A-Za-z]:\\(?:[^:*?"<>|]+\\?)*[^:*?"<>|]*)$/.test(
+    value,
+  );
+}
+
 // Checked here, not in the schema: one `value` carries every field type.
 function parseDate(value: unknown): string | null {
   if (value == null || value === '') return null;
@@ -1555,6 +1562,14 @@ export async function setIssueFieldValue(
   // A url field stores its value as text but must hold a valid http(s) URL.
   if (field.fieldType === 'url' && typeof input.value === 'string' && input.value !== '') {
     if (!isHttpUrl(input.value)) throw new HttpError(400, 'Invalid URL');
+  }
+  if (
+    field.fieldType === 'shared_path' &&
+    typeof input.value === 'string' &&
+    input.value !== '' &&
+    !isWindowsPath(input.value)
+  ) {
+    throw new HttpError(400, 'Invalid Windows path');
   }
   // A number field must be a finite number; the value column is numeric.
   if (field.fieldType === 'number' && input.value != null && input.value !== '') {

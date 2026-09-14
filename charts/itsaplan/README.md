@@ -314,10 +314,10 @@ bot:
 |----------------------------------|-----------------------------------------|--------------------------------|
 | `minio.enabled`                  | Deploy MinIO in-cluster                 | `true`                         |
 | `minio.bucket`                   | Bucket name to create                   | `planner-attachments`          |
-| `minio.image.repository`         | Image repository                        | `minio/minio`                  |
-| `minio.image.tag`                | Image tag                               | `RELEASE.2025-04-22T22-12-26Z` |
-| `minio.mcImage.repository`       | MinIO Client image repository           | `minio/mc`                     |
-| `minio.mcImage.tag`              | MinIO Client image tag                  | `RELEASE.2025-04-16T18-13-36Z` |
+| `minio.image.repository`         | Image repository                        | `quay.io/minio/minio`          |
+| `minio.image.tag`                | MinIO image tag                         | `RELEASE.2025-09-07T16-13-09Z` |
+| `minio.mcImage.repository`       | MinIO Client image repository           | `quay.io/minio/mc`             |
+| `minio.mcImage.tag`              | MinIO Client image tag                  | `RELEASE.2025-08-13T08-35-41Z` |
 | `minio.persistence.size`         | PVC size                                | `20Gi`                         |
 | `minio.persistence.storageClass` | Storage class (empty = cluster default) | `""`                           |
 | `minio.resources`                | CPU/memory requests and limits          | `{}`                           |

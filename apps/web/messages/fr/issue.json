@@ -33,7 +33,11 @@
     "groupLabels": "Étiquettes",
     "groupCustom": "Champs personnalisés",
     "empty": "Vide",
-    "openInNewTab": "Ouvrir dans un nouvel onglet"
+    "openInNewTab": "Ouvrir dans un nouvel onglet",
+    "openInExplorer": "Open in Explorer",
+    "installExplorerConnector": "Install Explorer Connector",
+    "sharedPathPlaceholder": "\\\\server\\share\\folder or C:\\folder",
+    "invalidSharedPath": "Enter a valid UNC or absolute Windows path"
   },
   "menu": {
     "preview": "Aperçu",
