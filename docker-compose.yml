@@ -17,7 +17,7 @@
 # checkout instead of the published images, build them:
 #   docker compose up -d --build
 # ─────────────────────────────────────────────────────────────
-name: itsaplan
+name: ${STACK_NAME:-itsaplan}
 
 services:
   postgres:
@@ -74,7 +74,7 @@ services:
 
   # Applies database migrations on startup, then serves the API.
   api:
-    image: ghcr.io/croffasia/itsaplan-api:${VERSION:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-croffasia}/itsaplan-api:${VERSION:-latest}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -130,12 +130,12 @@ services:
       default:
       proxy:
         aliases:
-          - itsaplan-api
+          - ${API_NETWORK_ALIAS:-itsaplan-api}
 
   # Webhook delivery, notification delivery, agent schedules, and agent runs.
   # Shares the database with the api. No public ports.
   worker:
-    image: ghcr.io/croffasia/itsaplan-worker:${VERSION:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-croffasia}/itsaplan-worker:${VERSION:-latest}
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
@@ -168,7 +168,7 @@ services:
   # Must stay at one replica: Telegram hands each getUpdates call to a single
   # caller, so a second instance would take updates away from the first.
   bot:
-    image: ghcr.io/croffasia/itsaplan-bot:${VERSION:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-croffasia}/itsaplan-bot:${VERSION:-latest}
     build:
       context: .
       dockerfile: apps/bot/Dockerfile
@@ -184,7 +184,7 @@ services:
   # The origins are read at startup and handed to the browser by the server render,
   # so the image carries none of them and a changed API_URL only needs a restart.
   web:
-    image: ghcr.io/croffasia/itsaplan-web:${VERSION:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-croffasia}/itsaplan-web:${VERSION:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -216,7 +216,7 @@ services:
       default:
       proxy:
         aliases:
-          - itsaplan-web
+          - ${WEB_NETWORK_ALIAS:-itsaplan-web}
 
 networks:
   proxy:
