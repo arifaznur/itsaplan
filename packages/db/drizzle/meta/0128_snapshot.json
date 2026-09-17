@@ -1,5 +1,5 @@
 {
-  "id": "aecb56d2-759b-48e8-a0ee-1e29ac76ca80",
+  "id": "3a88d463-8dce-44f8-bc2e-5ba09b5e7cc0",
   "prevId": "0b575e85-283f-4fb7-97ce-03f6d0ba05fa",
   "version": "7",
   "dialect": "postgresql",
@@ -3094,7 +3094,7 @@
       "checkConstraints": {
         "custom_field_field_type_check": {
           "name": "custom_field_field_type_check",
-          "value": "\"custom_field\".\"field_type\" IN ('text', 'markdown', 'url', 'shared_path', 'number', 'boolean', 'date', 'datetime', 'datetime_range', 'select', 'multi_select', 'member')"
+          "value": "\"custom_field\".\"field_type\" IN ('text', 'markdown', 'url', 'number', 'boolean', 'date', 'datetime', 'datetime_range', 'select', 'multi_select', 'member')"
         },
         "custom_field_member_scope_check": {
           "name": "custom_field_member_scope_check",
@@ -8493,6 +8493,20 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'invite'"
+        },
+        "is_favorite": {
+          "name": "is_favorite",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_hidden": {
+          "name": "is_hidden",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

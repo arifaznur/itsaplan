@@ -35,12 +35,10 @@ export default function AppSidebar({
   projects,
   currentProjectKey,
   onSelectProject,
-  onNewTeam,
 }: {
   projects: Project[];
   currentProjectKey: string | null;
   onSelectProject: (key: string) => void;
-  onNewTeam: () => void;
 }) {
   const t = useTranslations('nav');
   const pathname = usePathname();
@@ -73,7 +71,6 @@ export default function AppSidebar({
           projects={projects}
           currentProjectKey={currentProjectKey}
           onSelectProject={onSelectProject}
-          onNewTeam={onNewTeam}
         />
       </SidebarHeader>
 
