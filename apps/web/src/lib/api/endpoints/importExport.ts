@@ -130,3 +130,20 @@ export interface ProjectExport {
 
 export const exportProject = (projectKey: string) =>
   request<ProjectExport>(`/projects/${projectKey}/import-jobs/export`);
+
+export interface PortableImportResult {
+  states: number;
+  labels: number;
+  cycles: number;
+  issues: number;
+  comments: number;
+  relations: number;
+  unmatchedAssigneeEmails: string[];
+  unmatchedCommentAuthorEmails: string[];
+}
+
+export const importPortableProject = (projectKey: string, snapshot: ProjectExport) =>
+  request<PortableImportResult>(`/projects/${projectKey}/import-jobs/itsaplan`, {
+    method: 'POST',
+    body: JSON.stringify(snapshot),
+  });

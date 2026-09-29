@@ -8,6 +8,7 @@ import {
   ImportJobResponse,
   TestConnectionResponse,
   PlanePreviewResponse,
+  PortableImportResponse,
   ProjectExportResponse,
   createImportJobBody,
   importJobParams,
@@ -26,6 +27,7 @@ import {
   testPlaneStatesPreview,
 } from './service';
 import { exportProject } from './export';
+import { importPortableProject } from './portable-import';
 
 // Import jobs bring issues from an external tracker into a project. Creating one
 // stores an encrypted credential and leaves it 'pending' for the worker
@@ -89,6 +91,22 @@ export const importExportRoutes = new Elysia({
         'target — a download.',
     },
   })
+
+  .post(
+    '/projects/:projectKey/import-jobs/itsaplan',
+    ({ project, body }) => importPortableProject(project.id, body),
+    {
+      permission: ['import_export', 'create'],
+      body: ProjectExportResponse,
+      response: { 200: PortableImportResponse, ...commonErrors, ...errors(409) },
+      detail: {
+        summary: 'Import an ItsAPLAN project snapshot',
+        description:
+          'Import a portable ItsAPLAN JSON export into a new empty project. The operation ' +
+          'recreates states, labels, cycles, issues, comments, parents, and relations atomically.',
+      },
+    },
+  )
 
   .post(
     '/projects/:projectKey/import-jobs',

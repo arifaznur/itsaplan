@@ -100,6 +100,17 @@ export const ProjectExportResponse = t.Object({
   issues: t.Array(ExportedIssue),
 });
 
+export const PortableImportResponse = t.Object({
+  states: t.Number(),
+  labels: t.Number(),
+  cycles: t.Number(),
+  issues: t.Number(),
+  comments: t.Number(),
+  relations: t.Number(),
+  unmatchedAssigneeEmails: t.Array(t.String()),
+  unmatchedCommentAuthorEmails: t.Array(t.String()),
+});
+
 export const ImportJobResponse = t.Object({
   id: t.Number(),
   projectId: t.Number(),

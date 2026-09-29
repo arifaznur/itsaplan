@@ -11,6 +11,7 @@ import SettingsImportExportProjectPicker from './SettingsImportExportProjectPick
 import SettingsImportExportMappingReview from './SettingsImportExportMappingReview';
 import SettingsImportExportJobList from './SettingsImportExportJobList';
 import SettingsImportExportDownloadButton from './SettingsImportExportDownloadButton';
+import SettingsPortableImport from './SettingsPortableImport';
 
 export interface PlaneConnection extends PlaneConnectionInput {
   projects: PlaneProjectOption[];
@@ -52,6 +53,11 @@ export default function SettingsImportExport({ project }: { project: ProjectDeta
       <TabsContent value="import" className="mt-4 space-y-10">
         {canCreate && (
           <>
+            <SettingsSection title={t('portableImport')} description={t('portableImportHint')}>
+              <SettingsCard className="p-4">
+                <SettingsPortableImport projectKey={projectKey} />
+              </SettingsCard>
+            </SettingsSection>
             <SettingsSection title={t('source')} description={t('sourceHint')}>
               <Tabs value="plane">
                 <TabsList variant="line">

@@ -417,4 +417,99 @@ describe('import jobs', () => {
       expect(res.status).toBe(403);
     });
   });
+
+  describe('ItsAPLAN JSON import', () => {
+    const portable = {
+      exportedAt: '2026-09-29T03:02:24.000Z',
+      project: { key: 'SRC', name: 'Source', description: 'Portable source' },
+      states: [
+        { name: 'Backlog', category: 'backlog' },
+        { name: 'Done', category: 'completed' },
+      ],
+      labels: [{ name: 'bug', color: '#ff0000' }],
+      cycles: [],
+      issues: [
+        {
+          identifier: 'SRC-4',
+          title: 'Parent',
+          description: 'First issue',
+          state: 'Backlog',
+          labels: ['bug'],
+          cycle: null,
+          priority: 'high',
+          startDate: null,
+          dueDate: null,
+          parentIdentifier: null,
+          assigneeEmail: null,
+          comments: [
+            {
+              authorName: 'Former member',
+              authorEmail: 'former@example.com',
+              body: 'Imported comment',
+              createdAt: '2026-09-28T08:00:00.000Z',
+              replyToIndex: null,
+            },
+          ],
+          relations: [{ kind: 'blocks', targetIdentifier: 'SRC-9' }],
+        },
+        {
+          identifier: 'SRC-9',
+          title: 'Child',
+          description: '',
+          state: 'Done',
+          labels: [],
+          cycle: null,
+          priority: null,
+          startDate: null,
+          dueDate: null,
+          parentIdentifier: 'SRC-4',
+          assigneeEmail: 'missing@example.com',
+          comments: [],
+          relations: [],
+        },
+      ],
+    };
+
+    it('imports a portable snapshot atomically into an empty project', async () => {
+      const { api } = await setupOwnerProject();
+      const result = await jobs(api).itsaplan.post(portable);
+
+      expect(result.status).toBe(200);
+      expect(result.data).toEqual({
+        states: 2,
+        labels: 1,
+        cycles: 0,
+        issues: 2,
+        comments: 1,
+        relations: 1,
+        unmatchedAssigneeEmails: ['missing@example.com'],
+        unmatchedCommentAuthorEmails: ['former@example.com'],
+      });
+
+      const exported = await jobs(api).export.get();
+      expect(exported.data?.issues.map((item) => item.identifier)).toEqual(['MKT-4', 'MKT-9']);
+      expect(exported.data?.issues[1]).toMatchObject({
+        title: 'Child',
+        parentIdentifier: 'MKT-4',
+      });
+      expect(exported.data?.issues[0]?.comments).toMatchObject([
+        { authorName: 'Former member', body: 'Imported comment' },
+      ]);
+    });
+
+    it('refuses a second import into the populated project', async () => {
+      const { api } = await setupOwnerProject();
+      expect((await jobs(api).itsaplan.post(portable)).status).toBe(200);
+      expect((await jobs(api).itsaplan.post(portable)).status).toBe(409);
+    });
+
+    it('rolls back malformed references', async () => {
+      const { api } = await setupOwnerProject();
+      const malformed = structuredClone(portable);
+      malformed.issues[1]!.parentIdentifier = 'SRC-404';
+
+      expect((await jobs(api).itsaplan.post(malformed)).status).toBe(400);
+      expect((await jobs(api).export.get()).data?.issues).toEqual([]);
+    });
+  });
 });
