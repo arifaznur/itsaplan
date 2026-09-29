@@ -1,0 +1,4 @@
+interface:
+  display_name: 'ItsAPLAN Upgrade and Deploy'
+  short_description: 'Upgrade and validate Avant Aegis staging safely'
+  default_prompt: 'Use $itsaplan-upgrade-deploy to upgrade the Avant Aegis fork and validate it on staging.'
