@@ -1,16 +1,26 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
+import { ShieldCheck } from 'lucide-react';
 import { projectPath, projectRefOf } from '@/utils/paths';
+import { useAuthConfig } from '@/services/authConfig.service';
 import { Button } from '@/components/ui/button';
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldSeparator,
+} from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import {
   isExistingAccountError,
   registerAndAccept,
   signInForInvite,
+  signInWithOidcForInvite,
 } from '../services/invite.service';
 
 type Mode = 'register' | 'signin';
@@ -29,6 +39,8 @@ export default function InviteAuthForm({
   hasAccount: boolean;
 }) {
   const t = useTranslations('invite');
+  const tLogin = useTranslations('auth.login');
+  const authConfig = useAuthConfig();
   const router = useRouter();
   const [mode, setMode] = useState<Mode>(hasAccount ? 'signin' : 'register');
   const [password, setPassword] = useState('');
@@ -39,6 +51,11 @@ export default function InviteAuthForm({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const isRegister = mode === 'register';
+  const passwordEnabled = authConfig?.emailPassword !== false;
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('error')) setError(t('signInFailed'));
+  }, [t]);
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -85,6 +102,17 @@ export default function InviteAuthForm({
     }
   }
 
+  async function onOidc() {
+    setError(null);
+    setPending(true);
+    try {
+      await signInWithOidcForInvite(token);
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : t('signInFailed'));
+      setPending(false);
+    }
+  }
+
   let submitLabel;
   if (isRegister) {
     submitLabel = pending ? t('registering') : t('register');
@@ -101,22 +129,24 @@ export default function InviteAuthForm({
           <FieldDescription>{t('emailHint')}</FieldDescription>
         </Field>
 
-        <Field>
-          <FieldLabel htmlFor="invite-password">{t('passwordLabel')}</FieldLabel>
-          <Input
-            id="invite-password"
-            type="password"
-            autoComplete={isRegister ? 'new-password' : 'current-password'}
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={pending}
-          />
-          {isRegister && <FieldDescription>{t('passwordHint')}</FieldDescription>}
-        </Field>
+        {passwordEnabled && (
+          <Field>
+            <FieldLabel htmlFor="invite-password">{t('passwordLabel')}</FieldLabel>
+            <Input
+              id="invite-password"
+              type="password"
+              autoComplete={isRegister ? 'new-password' : 'current-password'}
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={pending}
+            />
+            {isRegister && <FieldDescription>{t('passwordHint')}</FieldDescription>}
+          </Field>
+        )}
 
-        {isRegister && (
+        {passwordEnabled && isRegister && (
           <Field>
             <FieldLabel htmlFor="invite-confirm">{t('confirmPasswordLabel')}</FieldLabel>
             <Input
@@ -135,23 +165,44 @@ export default function InviteAuthForm({
         {notice && <FieldDescription className="text-foreground">{notice}</FieldDescription>}
         {error && <FieldError>{error}</FieldError>}
 
-        <Field>
-          <Button type="submit" disabled={pending}>
-            {submitLabel}
-          </Button>
-        </Field>
+        {passwordEnabled && (
+          <Field>
+            <Button type="submit" disabled={pending}>
+              {submitLabel}
+            </Button>
+          </Field>
+        )}
 
-        <FieldDescription className="text-center">
-          {isRegister ? t('haveAccount') : t('needAccount')}{' '}
-          <button
-            type="button"
-            className="underline underline-offset-4"
-            onClick={() => switchMode(isRegister ? 'signin' : 'register')}
-            disabled={pending}
-          >
-            {isRegister ? t('switchToSignIn') : t('switchToRegister')}
-          </button>
-        </FieldDescription>
+        {authConfig?.oidc && (
+          <>
+            {passwordEnabled && <FieldSeparator>{tLogin('or')}</FieldSeparator>}
+            <Field>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={() => void onOidc()}
+              >
+                <ShieldCheck />
+                {authConfig.oidcLabel || tLogin('withSso')}
+              </Button>
+            </Field>
+          </>
+        )}
+
+        {passwordEnabled && (
+          <FieldDescription className="text-center">
+            {isRegister ? t('haveAccount') : t('needAccount')}{' '}
+            <button
+              type="button"
+              className="underline underline-offset-4"
+              onClick={() => switchMode(isRegister ? 'signin' : 'register')}
+              disabled={pending}
+            >
+              {isRegister ? t('switchToSignIn') : t('switchToRegister')}
+            </button>
+          </FieldDescription>
+        )}
       </FieldGroup>
     </form>
   );

@@ -69,3 +69,13 @@ export async function signInForInvite(input: {
     throw new InviteAuthError(result.error.message ?? input.signInFailed, result.error.code);
   }
 }
+
+export async function signInWithOidcForInvite(token: string): Promise<void> {
+  const inviteUrl = `${window.location.origin}/invite/${encodeURIComponent(token)}`;
+  const result = await signIn.oauth2({
+    providerId: 'oidc',
+    callbackURL: inviteUrl,
+    errorCallbackURL: inviteUrl,
+  });
+  if (result.error) throw new InviteAuthError(result.error.message ?? '');
+}
