@@ -19,7 +19,8 @@ import {
 } from '@/components/ui/table';
 
 // The projects of the team. A row opens the project in the side panel; the arrow in
-// its Actions cell opens the project itself, for the ones the reader is a member of.
+// its Actions cell opens the project itself, for the active ones the reader is a member
+// of: an archived project is restored before it is opened.
 export default function TeamProjectsTable({
   projects,
   onSelect,
@@ -67,14 +68,24 @@ export default function TeamProjectsTable({
               onClick={() => onSelect(project.id)}
             >
               <TableCell className="px-3 py-3">
-                <div className="flex min-w-0 items-center gap-2.5">
+                <div className="flex min-w-0 items-start gap-2.5">
                   <Badge
                     variant="outline"
-                    className="w-12 shrink-0 justify-center rounded px-1 py-0 font-mono text-[10px] text-muted-foreground"
+                    className="min-w-12 shrink-0 justify-center rounded px-1 py-0 font-mono text-[10px] text-muted-foreground"
                   >
                     {project.key}
                   </Badge>
-                  <span className="truncate text-sm font-medium">{project.name}</span>
+                  <span
+                    className="min-w-0 text-sm font-medium wrap-anywhere whitespace-normal"
+                    dir="auto"
+                  >
+                    {project.name}
+                  </span>
+                  {project.archivedAt && (
+                    <Badge variant="secondary" className="shrink-0">
+                      {t('archived')}
+                    </Badge>
+                  )}
                 </div>
               </TableCell>
 
@@ -107,7 +118,7 @@ export default function TeamProjectsTable({
               </TableCell>
 
               <TableCell className="px-3 py-2 text-end">
-                {project.isMember && (
+                {project.isMember && !project.archivedAt && (
                   <Button
                     asChild
                     variant="ghost"
@@ -117,7 +128,7 @@ export default function TeamProjectsTable({
                     title={t('panel.openProject')}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <Link href={projectPath(project.key)}>
+                    <Link href={projectPath(project.ref)}>
                       <ArrowUpRight className="size-4" />
                     </Link>
                   </Button>

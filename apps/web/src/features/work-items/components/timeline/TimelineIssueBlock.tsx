@@ -1,5 +1,6 @@
-import { useDndContext, useDroppable } from '@dnd-kit/core';
+import { useDroppable } from '@dnd-kit/core';
 import { DropLine } from '../shared/DropLine';
+import { SubtaskFoldProvider, useSubtaskFold } from '../../context/useSubtasks';
 
 // An issue's rows on the timeline — its own row plus the subtask and link
 // sub-rows under it — as one drop target: a drop anywhere on the block inserts
@@ -19,19 +20,21 @@ export function TimelineIssueBlock({
   onDrop: (draggedId: number) => void;
   children: React.ReactNode;
 }) {
-  // Dropping an issue on itself is a no-op: it neither moves nor gets a marker.
-  const { active } = useDndContext();
-  const self = Number(active?.id) === issueId;
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef, isOver, active } = useDroppable({
     id: `row:${issueId}`,
     disabled,
     data: { onDrop: (draggedId: number) => draggedId !== issueId && onDrop(draggedId) },
   });
+  // Dropping an issue on itself is a no-op: it neither moves nor gets a marker.
+  const self = Number(active?.id) === issueId;
+  // The subtask fold belongs to the block rather than to either row: the chevron is
+  // on the issue row and the rows it folds are its siblings.
+  const fold = useSubtaskFold();
   // The insertion marker sits at the block's top edge: a drop inserts before it.
   return (
     <div ref={setNodeRef} className="relative">
       {isOver && !self && <DropLine className="top-0 z-20" />}
-      {children}
+      <SubtaskFoldProvider value={fold}>{children}</SubtaskFoldProvider>
     </div>
   );
 }

@@ -1,20 +1,20 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import ExcelJS from 'exceljs';
-import { authedApi } from '#tests/helpers/app';
+import { authedApi, createProject } from '#tests/helpers/app';
 import { signUpTestUser } from '#tests/helpers/auth';
 import { resetDb } from '#tests/helpers/db';
-import { getProjectByKey } from '#modules/projects/service';
+import { getProjectByRef } from '#modules/projects/service';
 import { createMappedImport } from '../../service';
 
 // The import flow: the file is uploaded through the chat-attachments route, an
 // agent turns it into a draft by saving a column mapping (the
 // prepare_issue_import tool calls createMappedImport in process), and the confirm
-// route creates the issues. Needs MinIO like the attachments suite.
+// route creates the issues. Needs RustFS like the attachments suite.
 
 async function setup() {
   const owner = await signUpTestUser();
   const asOwner = authedApi(owner.cookie);
-  await asOwner.projects.post({ key: 'MKT', name: 'Marketing' });
+  await createProject(asOwner, { key: 'MKT', name: 'Marketing' });
   return { asOwner };
 }
 
@@ -35,7 +35,7 @@ async function uploadWorkbook(
 }
 
 async function mapImport(attachmentId: string, mapping: Record<string, string>) {
-  const project = await getProjectByKey('MKT');
+  const project = await getProjectByRef('MKT', '');
   if (!project) throw new Error('Test project was not created');
   return createMappedImport(project.id, attachmentId, mapping);
 }
@@ -127,9 +127,10 @@ describe('imports', () => {
   it('refuses a mapping that names a column the file does not have', async () => {
     const { asOwner } = await setup();
     const uploaded = await uploadWorkbook(asOwner, [['Task'], ['Only']]);
-    await expect(mapImport(uploaded.data!.id, { title: 'Nope' })).rejects.toThrow(
-      'not in the file',
-    );
+    // Settled before the assertion: Bun's `rejects` on a pending promise waits in a
+    // nested event loop, where reading the workbook takes seconds and trips the timeout.
+    const error = await mapImport(uploaded.data!.id, { title: 'Nope' }).catch((e: unknown) => e);
+    expect((error as Error).message).toContain('not in the file');
   });
 
   it('refuses to map a file that does not parse into a table', async () => {
@@ -145,9 +146,9 @@ describe('imports', () => {
 
   it('refuses to map an attachment of another project', async () => {
     const { asOwner } = await setup();
-    await asOwner.projects.post({ key: 'OPS', name: 'Ops' });
+    await createProject(asOwner, { key: 'OPS', name: 'Ops' });
     const uploaded = await uploadWorkbook(asOwner, [['Task'], ['Only']]);
-    const ops = await getProjectByKey('OPS');
+    const ops = await getProjectByRef('OPS', '');
     if (!ops) throw new Error('Test project was not created');
     await expect(createMappedImport(ops.id, uploaded.data!.id, { title: 'Task' })).rejects.toThrow(
       'Attachment not found',
@@ -168,7 +169,7 @@ describe('imports', () => {
 
   it('hides drafts of other projects', async () => {
     const { asOwner } = await setup();
-    await asOwner.projects.post({ key: 'OPS', name: 'Ops' });
+    await createProject(asOwner, { key: 'OPS', name: 'Ops' });
     const uploaded = await uploadWorkbook(asOwner, [['Task']]);
     const draft = await mapImport(uploaded.data!.id, { title: 'Task' });
     const wrong = await authedApi((await signUpTestUser()).cookie)

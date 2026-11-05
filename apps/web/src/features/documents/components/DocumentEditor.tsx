@@ -6,6 +6,11 @@ import type { ProjectDocument, ProjectDocumentSummary } from '@/lib/api/endpoint
 import { useRelativeTime } from '@/context/relativeTimeContext';
 import { useSession } from '@/lib/auth-client';
 import { useTranslations } from 'next-intl';
+import { useDocumentCommentMarks } from '../hooks/useDocumentCommentMarks';
+import { useDocumentCollaboration } from '../hooks/useDocumentCollaboration';
+import DocumentCommentsPanel from './DocumentCommentsPanel';
+import type { DocumentSelection } from './DocumentSelectionActions';
+import DocumentSyncBanner from './DocumentSyncBanner';
 import { useDocumentDraft } from '../hooks/useDocumentDraft';
 import { useDocumentActionGate } from '../hooks/useDocumentActionGate';
 import { useDocumentEditorPreferences } from '../hooks/useDocumentEditorPreferences';
@@ -31,6 +36,7 @@ export default function DocumentEditor({
   projectName,
   document,
   ancestors,
+  documents,
   authorName,
   authorNames,
   canEdit,
@@ -39,8 +45,9 @@ export default function DocumentEditor({
   isProjectOwner,
   canCreate,
   canDelete,
+  defaultCommentsOpen = false,
   onBack,
-  onCreateChild,
+  onCreate,
   onDuplicate,
   onDelete,
   onReload,
@@ -49,6 +56,7 @@ export default function DocumentEditor({
   projectName: string;
   document: ProjectDocument;
   ancestors: ProjectDocumentSummary[];
+  documents: ProjectDocumentSummary[];
   authorName: string | null;
   authorNames: Record<string, string>;
   canEdit: boolean;
@@ -57,8 +65,10 @@ export default function DocumentEditor({
   isProjectOwner: boolean;
   canCreate: boolean;
   canDelete: boolean;
-  onBack: () => void;
-  onCreateChild: () => void;
+  defaultCommentsOpen?: boolean;
+  // Left out where the page around the document has its own way back.
+  onBack?: () => void;
+  onCreate: (parentId: number | null, isPrivate: boolean) => void;
   onDuplicate: (title: string, version: number) => Promise<void>;
   onDelete: (version: number) => Promise<void>;
   onReload: () => Promise<ProjectDocument | null>;
@@ -71,6 +81,8 @@ export default function DocumentEditor({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(defaultCommentsOpen);
+  const [commentSelection, setCommentSelection] = useState<DocumentSelection | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const documentAction = useDocumentActionGate();
   const currentUserId = session?.user.id ?? null;
@@ -92,6 +104,7 @@ export default function DocumentEditor({
   const setDocumentFavorite = useSetDocumentFavorite(projectKey);
   const uploadDocumentAsset = useUploadDocumentAsset(projectKey, document.id);
   const {
+    legacyDraft,
     title,
     content,
     contentJson,
@@ -104,7 +117,32 @@ export default function DocumentEditor({
     save,
     replaceWith,
     adoptServerDocument,
-  } = useDocumentDraft({ projectKey, document, editable: editorEditable, userId: currentUserId });
+  } = useDocumentDraft({
+    projectKey,
+    document,
+    editable: editorEditable,
+    userId: currentUserId,
+    collaborative: editable,
+  });
+  const collaboration = useDocumentCollaboration({
+    editor,
+    projectKey,
+    document,
+    userId: currentUserId,
+    enabled: editable && !legacyDraft,
+    onSaved: adoptServerDocument,
+  });
+  useDocumentCommentMarks(
+    editor,
+    projectKey,
+    document.id,
+    () => {
+      setCommentsOpen(true);
+      setInspectorOpen(false);
+    },
+    editable ? collaboration.version : document.version,
+    collaboration.ready,
+  );
   const providerActionPending =
     updateDocument.isPending ||
     setDocumentAccess.isPending ||
@@ -113,7 +151,13 @@ export default function DocumentEditor({
     restoreDocument.isPending ||
     setDocumentFavorite.isPending;
   const actionPending = documentAction.pending || providerActionPending;
-  const busy = actionPending || saveState === 'saving';
+  // A session that failed to open holds no local steps, so an action goes with the
+  // page's own version instead of waiting for a session that may never open.
+  const usesSession = editable && !collaboration.openFailed;
+  const busy =
+    actionPending ||
+    saveState === 'saving' ||
+    (usesSession && (!collaboration.ready || collaboration.status === 'saving'));
 
   useEffect(() => {
     const element = titleRef.current;
@@ -129,9 +173,11 @@ export default function DocumentEditor({
 
   const prepareVersion = async () => {
     if (providerActionPending || saveState === 'conflict' || saveState === 'error') return null;
+    const synchronized = usesSession ? await collaboration.flush() : null;
+    if (usesSession && !synchronized) return null;
     const updatedDraft = await save();
     if (dirty && !updatedDraft) return null;
-    return updatedDraft?.version ?? version;
+    return updatedDraft?.version ?? synchronized?.version ?? version;
   };
 
   const runVersioned = async (
@@ -165,10 +211,17 @@ export default function DocumentEditor({
           projectName={projectName}
           document={document}
           ancestors={ancestors}
+          documents={documents}
           title={title}
-          content={content}
-          richHtml={editor?.getHTML() ?? ''}
-          saveState={saveState}
+          content={() => editor?.storage.markdown.getMarkdown() ?? content}
+          richHtml={() => editor?.getHTML() ?? ''}
+          saveState={
+            editable && collaboration.status !== 'saved'
+              ? ['connecting', 'saving'].includes(collaboration.status)
+                ? 'saving'
+                : 'error'
+              : saveState
+          }
           dirty={dirty}
           stickyToolbar={stickyToolbar}
           canCreate={canCreate}
@@ -178,7 +231,10 @@ export default function DocumentEditor({
           canDelete={canManageLifecycle}
           busy={busy}
           onBack={onBack}
-          onRetrySave={() => void save()}
+          onRetrySave={() => {
+            collaboration.retry();
+            void save();
+          }}
           onFullWidthChange={(fullWidth) => {
             void runVersioned((baseVersion) =>
               updateDocument.mutateAsync({
@@ -188,7 +244,7 @@ export default function DocumentEditor({
             );
           }}
           onStickyToolbarChange={setStickyToolbar}
-          onCreateChild={onCreateChild}
+          onCreate={onCreate}
           onDuplicate={() => {
             void documentAction.run(async () => {
               const baseVersion = await prepareVersion();
@@ -222,7 +278,7 @@ export default function DocumentEditor({
             void runVersioned((baseVersion) =>
               archiveDocument.mutateAsync({ documentId: document.id, version: baseVersion }),
             ).then((changed) => {
-              if (changed) onBack();
+              if (changed) onBack?.();
             });
           }}
           onRestore={() => {
@@ -231,11 +287,40 @@ export default function DocumentEditor({
             );
           }}
           onDelete={() => setDeleteOpen(true)}
+          commentsOpen={commentsOpen}
+          onCommentsOpen={() => {
+            setCommentsOpen((value) => !value);
+            setInspectorOpen(false);
+          }}
           inspectorOpen={inspectorOpen}
-          onInspectorOpenChange={setInspectorOpen}
+          onInspectorOpenChange={(open) => {
+            setInspectorOpen(open);
+            if (open) setCommentsOpen(false);
+          }}
           onOpenHistory={() => setHistoryOpen(true)}
         />
 
+        {editable && !legacyDraft && (
+          <DocumentSyncBanner
+            state={collaboration.status}
+            onRetry={collaboration.retry}
+            recoveryConflict={collaboration.recoveryConflict}
+            onDiscardRecovery={collaboration.discardRecovery}
+            onExportRecovery={() => {
+              if (!editor) return;
+              const url = URL.createObjectURL(
+                new Blob([editor.storage.markdown.getMarkdown()], {
+                  type: 'text/markdown;charset=utf-8',
+                }),
+              );
+              const link = window.document.createElement('a');
+              link.href = url;
+              link.download = `${title || 'document'}-recovery.md`;
+              link.click();
+              URL.revokeObjectURL(url);
+            }}
+          />
+        )}
         {saveState === 'conflict' && (
           <DocumentConflictBanner onReload={() => setDiscardOpen(true)} />
         )}
@@ -248,7 +333,22 @@ export default function DocumentEditor({
           editorRevision={editorRevision}
           editor={editor}
           titleRef={titleRef}
-          editable={editorEditable}
+          editable={editorEditable && collaboration.ready}
+          collaborative
+          onComment={() => {
+            void collaboration.flush().then((saved) => {
+              if (!editor || !saved) return;
+              const { from, to } = editor.state.selection;
+              setCommentSelection({
+                from,
+                to,
+                quote: editor.state.doc.textBetween(from, to, '\n'),
+                version: saved.version,
+              });
+              setCommentsOpen(true);
+              setInspectorOpen(false);
+            });
+          }}
           stickyToolbar={stickyToolbar}
           updateLabel={updateLabel}
           onEditorReady={setEditor}
@@ -263,11 +363,26 @@ export default function DocumentEditor({
             );
           }}
           onContentChange={({ markdown, json }) => setContent(markdown, json)}
-          onContentBlur={() => void save()}
+          onContentBlur={() => {
+            void collaboration.flush();
+            void save();
+          }}
           onUploadImage={(file) => uploadDocumentAsset.mutateAsync(file)}
         />
       </section>
 
+      {commentsOpen && (
+        <DocumentCommentsPanel
+          editor={editor}
+          projectKey={projectKey}
+          documentId={document.id}
+          version={version}
+          selection={commentSelection}
+          canComment={canEdit && document.archivedAt === null}
+          onClose={() => setCommentsOpen(false)}
+          onCommented={() => setCommentSelection(null)}
+        />
+      )}
       <DocumentEditorInspector
         open={inspectorOpen}
         projectKey={projectKey}

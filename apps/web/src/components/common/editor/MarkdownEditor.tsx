@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { TableKit } from '@tiptap/extension-table';
+import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import { common, createLowlight } from 'lowlight';
@@ -10,8 +12,13 @@ import { Markdown } from 'tiptap-markdown';
 import { pasteMarkdown } from './pasteMarkdown';
 import { ResizableImage } from './tiptap-image';
 import { Mention } from '@/lib/tiptap-mention';
+import { useSession } from '@/lib/auth-client';
+import { useIssueRefs } from '@/context/issueRefs';
+import { IssueRef } from './issueRefDecorations';
+import { refreshDecorations } from './refreshDecorations';
 import { SlashCommand } from '@/lib/tiptap-slash-command';
 import { MarkdownTable } from './tiptap-table';
+import { TightTaskList } from './tiptap-task-list';
 import { Video } from './tiptap-video';
 import { attachmentHtml, type Embeddable } from './attachmentEmbed';
 import { openLinkOnModifierClick } from './modifierClickLink';
@@ -20,7 +27,8 @@ import EditorImagePicker from './EditorImagePicker';
 import EditorSelectionMenu from './EditorSelectionMenu';
 import EditorTableMenu from './EditorTableMenu';
 import EditorLinkPreview from './EditorLinkPreview';
-import { useMentionCandidates } from '@/hooks/useMentionCandidates';
+import { useMentionCandidates, useMentionNames } from '@/hooks/useMentionCandidates';
+import type { MentionSource } from '@/lib/api/endpoints/mentions';
 import { useTranslations } from 'next-intl';
 
 // Shared by every editor instance. A block with no language is detected by
@@ -46,6 +54,8 @@ export default function MarkdownEditor({
   editable = true,
   uploadFile,
   imageAttachments,
+  readingLinks = true,
+  mentions,
 }: {
   defaultValue: string;
   onChange?: (markdown: string) => void;
@@ -64,15 +74,38 @@ export default function MarkdownEditor({
   // Offered in a picker, to embed an upload again. Omitted where there is nothing
   // stored to read them from yet (a create dialog), which drops the picker.
   imageAttachments?: Embeddable[];
+  readingLinks?: boolean;
+  // Where the text is written, which decides who the "@" menu offers. Without it the
+  // menu offers nobody: a mention in the text would reach no one.
+  mentions?: MentionSource;
 }) {
   const t = useTranslations('common.editor');
   const editorRef = useRef<Editor | null>(null);
-  const linkKeyboardHandlers = useMemo(createLinkKeyboardHandlers, []);
+  const linkKeyboardHandlers = useMemo(() => createLinkKeyboardHandlers(true), []);
   // Held in a ref because the extensions are built once: the "@" menu reads the
   // roster through it, so a list that arrives later is still offered.
-  const mentionCandidates = useMentionCandidates();
+  const router = useRouter();
+  const { data: session } = useSession();
+  const issueRefs = useIssueRefs();
+  const mentionCandidates = useMentionCandidates(mentions ?? null);
   const mentionCandidatesRef = useRef(mentionCandidates);
   mentionCandidatesRef.current = mentionCandidates;
+  const mentionNames = useMentionNames();
+  const mentionNamesRef = useRef(mentionNames);
+  mentionNamesRef.current = mentionNames;
+  const issueRefsRef = useRef(issueRefs);
+  issueRefsRef.current = issueRefs;
+  const openIssueRefRef = useRef(router.push);
+  openIssueRefRef.current = (href: string) => router.push(href);
+  const selfHandle = session?.user.username ?? '';
+  const selfHandleRef = useRef(selfHandle);
+  selfHandleRef.current = selfHandle;
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
+  // False while the field can be typed into but has no focus: the chip shows, and
+  // swaps for the plain identifier only once editing actually starts.
+  const focusedRef = useRef(false);
+  const [focused, setFocused] = useState(false);
   // Whether the document has changed since this editor was mounted. The markdown
   // round trip is not an identity: the link extension's autolink parses a bare URL
   // into a link node, which serialises back in angle brackets. A blur reporting every
@@ -98,6 +131,7 @@ export default function MarkdownEditor({
   };
 
   const editor = useEditor({
+    immediatelyRender: false,
     editable,
     extensions: [
       // Replaces StarterKit's plain code block, keeping the node name codeBlock.
@@ -111,9 +145,19 @@ export default function MarkdownEditor({
       }),
       // Renders ![](url) markdown inline.
       ResizableImage,
-      // Renders an @username in the text as a mention chip, and offers the project's
-      // members and agents while one is typed.
-      Mention.configure({ items: () => mentionCandidatesRef.current }),
+      // Renders an @username in the text as a mention chip, and offers who a mention
+      // written here reaches while one is typed.
+      Mention.configure({
+        items: () => mentionCandidatesRef.current,
+        self: () => selfHandleRef.current,
+        name: (handle) => mentionNamesRef.current.get(handle),
+      }),
+      // Paints KEY-123 as a link without writing the link into the markdown.
+      IssueRef.configure({
+        refs: () => issueRefsRef.current.refs,
+        open: (href) => openIssueRefRef.current(href),
+        rich: () => issueRefsRef.current.resolve && (!editableRef.current || !focusedRef.current),
+      }),
       // Renders video attachments as an inline <video> player.
       Video,
       // TableKit carries the row and cell nodes around MarkdownTable's table node.
@@ -121,8 +165,11 @@ export default function MarkdownEditor({
       // column would be lost the next time the description is read back.
       TableKit.configure({ table: false }),
       MarkdownTable.configure({ resizable: false }),
+      TightTaskList,
+      TaskItem.configure({ nested: true }),
       SlashCommand.configure({
         codeBlockLabel: t('codeBlock'),
+        taskListLabel: t('todoList'),
         tableLabel: t('table'),
         image: imageAttachments
           ? { label: t('image'), onPick: () => setImagePickerOpen(true) }
@@ -176,7 +223,13 @@ export default function MarkdownEditor({
       changedRef.current = true;
       onChange?.(editor.storage.markdown.getMarkdown());
     },
+    onFocus: () => {
+      focusedRef.current = true;
+      setFocused(true);
+    },
     onBlur: ({ editor }) => {
+      focusedRef.current = false;
+      setFocused(false);
       if (changedRef.current) onBlur?.(editor.storage.markdown.getMarkdown());
     },
   });
@@ -187,16 +240,23 @@ export default function MarkdownEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
+  const issueRefList = issueRefs.refs.join(',');
+  useEffect(() => {
+    // After the commit. The refresh mounts the chip, and doing it here calls flushSync.
+    const frame = requestAnimationFrame(() => refreshDecorations(editor));
+    return () => cancelAnimationFrame(frame);
+  }, [editor, issueRefList, issueRefs.resolve, selfHandle, editable, focused]);
+
   if (!editor) return null;
 
   return (
     <div className={className}>
-      {editable && <EditorSelectionMenu editor={editor} />}
+      {editable && <EditorSelectionMenu editor={editor} taskList />}
       {editable && <EditorTableMenu editor={editor} />}
       {/* Grows with the text rather than being pinned to the container's height,
           so a container that scrolls measures the overflow and shows a bar. */}
       <EditorContent editor={editor} className="flex min-h-full flex-col" />
-      <EditorLinkPreview editor={editor} />
+      <EditorLinkPreview editor={editor} source={defaultValue} compact={readingLinks} />
       {imageAttachments && (
         <EditorImagePicker
           open={imagePickerOpen}

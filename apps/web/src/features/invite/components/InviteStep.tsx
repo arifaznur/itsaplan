@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { InviteView } from '@/lib/api/endpoints/invites';
 import { signOut, useSession } from '@/lib/auth-client';
+import { projectRefOf } from '@/utils/paths';
 import { Button } from '@/components/ui/button';
 import InviteActions from './InviteActions';
 import InviteAuthForm from './InviteAuthForm';
@@ -16,17 +16,15 @@ import InviteNotice from './InviteNotice';
 export default function InviteStep({ token, invite }: { token: string; invite: InviteView }) {
   const t = useTranslations('invite');
   const tCommon = useTranslations('common');
-  const router = useRouter();
   const { data: session, isPending: sessionPending } = useSession();
 
-  async function switchAccount() {
-    await signOut();
-    router.refresh();
+  function switchAccount() {
+    void signOut('here');
   }
 
-  if (invite.status !== 'pending') {
+  if (invite.status !== 'pending' || invite.expired) {
     return (
-      <InviteNotice message={t('alreadyHandled', { status: invite.status })}>
+      <InviteNotice>
         <Button asChild variant="outline">
           <Link href="/">{t('goToApp')}</Link>
         </Button>
@@ -44,7 +42,12 @@ export default function InviteStep({ token, invite }: { token: string; invite: I
 
   const sessionEmail = session.user.email;
   if (sessionEmail.toLowerCase() === invite.email.toLowerCase()) {
-    return <InviteActions token={token} projectKey={invite.projectKey} />;
+    return (
+      <InviteActions
+        token={token}
+        projectKey={invite.projectKey && projectRefOf(invite.teamRef, invite.projectKey)}
+      />
+    );
   }
 
   return (

@@ -34,17 +34,15 @@ export default function AppSidebar({
   projects,
   currentProjectKey,
   onSelectProject,
-  onNewTeam,
 }: {
   projects: Project[];
   currentProjectKey: string | null;
   onSelectProject: (key: string) => void;
-  onNewTeam: () => void;
 }) {
   const t = useTranslations('nav');
   const pathname = usePathname();
   const disabled = !currentProjectKey;
-  const projectId = projects.find((p) => p.key === currentProjectKey)?.id ?? null;
+  const projectId = projects.find((p) => p.ref === currentProjectKey)?.id ?? null;
 
   const { data: session } = useSession();
   // The session store can already be filled by the time React hydrates, while the
@@ -71,7 +69,6 @@ export default function AppSidebar({
           projects={projects}
           currentProjectKey={currentProjectKey}
           onSelectProject={onSelectProject}
-          onNewTeam={onNewTeam}
         />
       </SidebarHeader>
 

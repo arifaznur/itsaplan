@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useShellRoute } from '@/hooks/useShellRoute';
 import { useTranslations } from 'next-intl';
 import { useShell } from '@/context/shellContext';
 import { usePermissions } from '@/hooks/usePermissions';
+import { titlePath, useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { dashboardPath, dashboardsPath } from '@/utils/paths';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -15,31 +17,52 @@ import WidgetGrid from './components/WidgetGrid';
 import AddWidgetDialog from './components/AddWidgetDialog';
 
 // The dashboards section: a tab strip of named dashboards over a grid of analytics
-// widgets. The active dashboard comes from the route; with none selected the first
-// saved dashboard shows, or a built-in default when the project has none. Layout
-// edits are local until saved (see useDashboardEditor).
+// widgets. The active dashboard comes from the route; with none selected the
+// built-in Overview stays active even when the project also has saved dashboards.
+// Layout edits are local until saved (see useDashboardEditor).
 export default function DashboardsPage() {
   const t = useTranslations('dashboards');
   const tCommon = useTranslations('common');
   const { project } = useShell();
   const { can } = usePermissions();
-  const params = useParams<{ projectKey: string; dashboardId?: string }>();
+  const params = useParams<{ dashboardId?: string }>();
   const router = useRouter();
-  const projectKey = params.projectKey;
+  const projectKey = useShellRoute().projectKey ?? '';
 
-  const { data: dashboards, isLoading } = useDashboardsQuery(projectKey);
+  const { data: dashboards, isLoading, isFetching, isSuccess } = useDashboardsQuery(projectKey);
   const [editing, setEditing] = useState(false);
 
   const list = dashboards ?? [];
-  const routeId = params.dashboardId ? Number(params.dashboardId) : null;
-  // With no id in the URL, fall back to the first saved dashboard.
-  const activeDashboardId = routeId ?? list[0]?.id ?? null;
-
-  const editor = useDashboardEditor(projectKey, list, activeDashboardId, (id) =>
-    router.push(id != null ? dashboardPath(projectKey, id) : dashboardsPath(projectKey)),
+  const parsedRouteId = params.dashboardId ? Number(params.dashboardId) : null;
+  const routeId =
+    parsedRouteId != null && Number.isSafeInteger(parsedRouteId) && parsedRouteId > 0
+      ? parsedRouteId
+      : null;
+  const activeDashboardId = routeId;
+  useDocumentTitle(
+    titlePath(
+      project?.project.name,
+      isSuccess && list.find((dashboard) => dashboard.id === routeId)?.name,
+    ),
   );
+  const missingDashboard =
+    isSuccess &&
+    !isFetching &&
+    params.dashboardId != null &&
+    (routeId == null || !list.some((dashboard) => dashboard.id === routeId));
 
-  if (!project || isLoading) {
+  const selectDashboard = (id: number | null) => {
+    setEditing(false);
+    router.push(id != null ? dashboardPath(projectKey, id) : dashboardsPath(projectKey));
+  };
+
+  const editor = useDashboardEditor(projectKey, list, activeDashboardId, selectDashboard);
+
+  useEffect(() => {
+    if (missingDashboard) router.replace(dashboardsPath(projectKey));
+  }, [missingDashboard, projectKey, router]);
+
+  if (!project || isLoading || missingDashboard) {
     return (
       <div className="flex-1 space-y-4 p-6">
         <Skeleton className="h-8 w-full max-w-md" />
@@ -56,8 +79,8 @@ export default function DashboardsPage() {
     );
   }
 
-  // Layout editing (add/move/resize/remove widgets, save) is a dashboards edit.
-  const canEditLayout = can('dashboards', 'edit');
+  // Saving Overview creates a dashboard; saved layouts require edit permission.
+  const canEditLayout = editor.isVirtual ? can('dashboards', 'create') : can('dashboards', 'edit');
 
   function saveLabel() {
     if (editor.saving) return tCommon('saving');
@@ -105,11 +128,11 @@ export default function DashboardsPage() {
         dashboards={list}
         activeDashboardId={activeDashboardId}
         isVirtual={editor.isVirtual}
-        onSelect={(id) => router.push(dashboardPath(projectKey, id))}
+        onSelect={selectDashboard}
         onNewDashboard={(name) => void editor.createDashboard(name)}
         onRename={(d, name) => void editor.renameDashboard(d, name)}
         onDelete={(d) => void editor.deleteDashboard(d)}
-        onReorder={(dragged, target) => editor.reorderDashboards(dragged, target)}
+        onReorder={editor.reorderDashboards}
         actions={layoutActions()}
       />
 

@@ -9,12 +9,12 @@ import { iso } from '#shared/lib';
 // The delivery side is separate.
 
 // The event types a subscription can select. Keep this list in sync with the events
-// the delivery side emits (modules/issues/service.ts, activity.ts, links.ts) and
-// with the frontend list (apps/web src/lib/api/endpoints/webhooks.ts).
+// emitted through modules/issues/webhook-payload.ts and modules/agents/core/run-finished.ts,
+// and with the frontend list (apps/web src/lib/api/endpoints/webhooks.ts).
 //
-// issue.updated fires on any field change. The granular issue.assigned,
-// issue.state_changed, and issue.label_changed fire in addition, and only when that
-// specific field changes on an existing issue. issue.state_changed fires when the
+// issue.updated fires on any field change, archiving and restoring included. The
+// granular issue.assigned, issue.state_changed, and issue.label_changed fire in
+// addition, and only when that specific field changes on an existing issue. issue.state_changed fires when the
 // issue moves to a different state (column). issue.link_changed fires for both issues
 // of an added or removed relation, and without issue.updated: no field of either
 // issue changed.
@@ -32,6 +32,9 @@ export const WEBHOOK_EVENT_TYPES = [
   // again for the replies a delete takes with it.
   'comment.updated',
   'comment.deleted',
+  // A run of an agent in the project ended: success, failed or canceled. Its payload is
+  // the run (modules/agents/core/run-finished.ts).
+  'agent_run.finished',
 ] as const;
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 
@@ -96,7 +99,7 @@ export async function getWebhook(id: number): Promise<WebhookRow | null> {
   return rows[0] ? mapWebhook(rows[0]) : null;
 }
 
-// Updates only the fields the patch provides. A caller cannot change the secret.
+// Updates only the fields the patch provides. The secret changes only through rotation.
 export async function updateWebhook(
   id: number,
   patch: { url?: string; events?: WebhookEventType[]; isActive?: boolean },
@@ -112,6 +115,17 @@ export async function updateWebhook(
   if (patch.isActive === true) set.consecutiveFailures = 0;
   if (Object.keys(set).length === 0) return getWebhook(id);
   const [row] = await db.update(webhook).set(set).where(eq(webhook.id, id)).returning();
+  return row ? mapWebhook(row) : null;
+}
+
+// Deliveries are signed when they are sent, so a retry queued before the rotation is
+// signed with the new secret too.
+export async function rotateWebhookSecret(id: number): Promise<WebhookRow | null> {
+  const [row] = await db
+    .update(webhook)
+    .set({ secret: generateSecret() })
+    .where(eq(webhook.id, id))
+    .returning();
   return row ? mapWebhook(row) : null;
 }
 

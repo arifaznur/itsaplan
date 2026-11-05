@@ -7,7 +7,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { acceptInvite, rejectInvite } from '@/lib/api/endpoints/invites';
 import { ApiError } from '@/lib/api/core/client';
-import { projectPath } from '@/utils/paths';
+import { qk } from '@/services/queryKeys';
+import { projectPath, projectRefOf } from '@/utils/paths';
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
 import InviteNotice from './InviteNotice';
@@ -37,7 +38,15 @@ export default function InviteActions({
     setBusy('accept');
     try {
       const result = await acceptInvite(token);
-      router.push(result.projectKey ? projectPath(result.projectKey) : '/');
+      await Promise.all([
+        ...[qk.teams, qk.projects, qk.workspaces].map((queryKey) =>
+          qc.invalidateQueries({ queryKey, refetchType: 'all' }),
+        ),
+        qc.invalidateQueries({ queryKey: qk.receivedInvites }),
+      ]);
+      router.push(
+        result.projectKey ? projectPath(projectRefOf(result.teamRef, result.projectKey)) : '/',
+      );
       router.refresh();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'ALREADY_PROJECT_MEMBER') setAlreadyMember(true);
@@ -51,7 +60,10 @@ export default function InviteActions({
     setBusy('reject');
     try {
       await rejectInvite(token);
-      await qc.invalidateQueries({ queryKey: ['invite', token] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['invite', token] }),
+        qc.invalidateQueries({ queryKey: qk.receivedInvites }),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('declineError'));
       setBusy(null);

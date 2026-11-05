@@ -1,7 +1,14 @@
 import type { McpApp } from './types';
 import type { McpRouteTool } from './generate';
-import { MCP_LOOPBACK_HEADER, setMcpOAuthToken } from '../shared/mcp-request';
+import {
+  AGENT_PROJECT_HEADER,
+  MCP_LOOPBACK_HEADER,
+  setMcpClientRequest,
+  setMcpOAuthToken,
+} from '../shared/mcp-request';
 import type { McpCredential } from './credential';
+import { structuredResult, type StructuredResult } from './result';
+import { withPublicAttachmentUrls, withStoredAttachmentUrls } from './attachment-urls';
 
 // Methods that carry a request body; the rest put their arguments in the query.
 
@@ -21,14 +28,16 @@ const BASE = 'http://localhost';
 // loopback header, and only a request carrying that header is subject to the
 // per-project MCP toggle. An internal agent run dispatches through the same routes
 // but is not MCP, so disabling MCP on a project must not disarm its agents.
+// projectId is the project an internal agent's run works in (AGENT_PROJECT_HEADER).
+// clientRequest is the request that reached POST /mcp (setMcpClientRequest).
 export async function dispatchTool(
   app: McpApp,
   tool: McpRouteTool,
   args: Record<string, unknown>,
   credential: McpCredential,
-  opts: { viaMcpEndpoint: boolean },
-): Promise<{ text: string; isError: boolean }> {
-  const rest: Record<string, unknown> = { ...args };
+  opts: { viaMcpEndpoint: boolean; projectId?: number; clientRequest?: Request },
+): Promise<{ text: string; isError: boolean; structuredContent: StructuredResult }> {
+  const rest = withStoredAttachmentUrls(args);
 
   let path = tool.path;
   for (const name of tool.pathParams) {
@@ -57,11 +66,17 @@ export async function dispatchTool(
       ...(credential.kind === 'api-key' ? { 'x-api-key': credential.apiKey } : {}),
       // Marks this as an MCP call so guards enforce the per-project MCP toggle.
       ...(opts.viaMcpEndpoint ? { [MCP_LOOPBACK_HEADER]: '1' } : {}),
+      ...(opts.projectId != null ? { [AGENT_PROJECT_HEADER]: String(opts.projectId) } : {}),
     },
     body,
   });
   if (credential.kind === 'oauth') setMcpOAuthToken(request, credential.accessToken);
+  if (opts.clientRequest) setMcpClientRequest(request, opts.clientRequest);
   const response = await app.handle(request);
-  const text = await response.text();
-  return { text, isError: response.status >= 400 };
+  const text = withPublicAttachmentUrls(await response.text());
+  return {
+    text,
+    isError: response.status >= 400,
+    structuredContent: structuredResult(response, text, tool.method, tool.outputSchema),
+  };
 }

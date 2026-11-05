@@ -22,7 +22,7 @@ helm install itsaplan charts/itsaplan \
   --set secrets.s3SecretAccessKey=minioadmin
 ```
 
-This deploys the full stack with the built-in PostgreSQL and MinIO. For production, use a values file instead of `--set`
+This deploys the full stack with the built-in PostgreSQL and RustFS. For production, use a values file instead of `--set`
 flags and store secrets externally (Sealed Secrets, External Secrets Operator, etc.).
 
 ## What gets deployed
@@ -34,8 +34,8 @@ flags and store secrets externally (Sealed Secrets, External Secrets Operator, e
 | Worker            | Deployment                  | always                                 |
 | Bot (Telegram)    | Deployment                  | `bot.enabled` (default `true`)         |
 | PostgreSQL        | StatefulSet + Service + PVC | `postgresql.enabled` (default `true`)  |
-| MinIO             | Deployment + Service + PVC  | `minio.enabled` (default `true`)       |
-| MinIO bucket init | Job (Helm hook)             | `minio.enabled`                        |
+| RustFS            | Deployment + Service + PVC  | `minio.enabled` (default `true`)       |
+| RustFS bucket init | Job (Helm hook)            | `minio.enabled`                        |
 | Web Ingress       | Ingress                     | `ingress.enabled`                      |
 | API Ingress       | Ingress or IngressRoute     | `ingress.enabled` + `ingress.api.mode` |
 | TLS Certificate   | Certificate (cert-manager)  | `certificate.enabled`                  |
@@ -55,7 +55,7 @@ externalDatabase:
 
 ## Using an external S3-compatible store
 
-Disable the built-in MinIO and provide an endpoint:
+Disable the built-in RustFS and provide an endpoint:
 
 ```yaml
 minio:
@@ -68,7 +68,7 @@ api:
   env:
     S3_BUCKET: "my-bucket"
     S3_REGION: "us-east-1"
-    S3_FORCE_PATH_STYLE: "false"  # false for AWS/R2, true for MinIO
+    S3_FORCE_PATH_STYLE: "false"  # false for AWS/R2, true for RustFS
 
 secrets:
   s3AccessKeyId: "AKIA..."
@@ -148,6 +148,17 @@ bot:
   enabled: false
 ```
 
+## Pro edition
+
+`values-pro.yaml` runs the Pro images. Pass it before your own values file:
+
+```bash
+helm install itsaplan charts/itsaplan -f charts/itsaplan/values-pro.yaml -f values.yaml
+```
+
+Without a valid license the Pro images run as the core does. The license key is entered in
+god mode, under **License**.
+
 ## Values reference
 
 ### Global
@@ -159,6 +170,7 @@ bot:
 | `nodeSelector`       | Global node selector (per-component overrides take precedence) | `{}`    |
 | `tolerations`        | Global tolerations                                             | `[]`    |
 | `affinity`           | Global affinity                                                | `{}`    |
+| `pro`                | Run the Pro images (set by `values-pro.yaml`)                  | `false` |
 | `imagePullSecrets`   | Image pull secrets for private registries                      | `[]`    |
 | `podSecurityContext` | Pod-level security context                                     | `{}`    |
 | `securityContext`    | Container-level security context                               | `{}`    |
@@ -184,6 +196,9 @@ bot:
 | `api.env.API_URL`                     | Public API origin                                         | `""`                             |
 | `api.env.APP_URL`                     | Public web origin                                         | `""`                             |
 | `api.env.COOKIE_DOMAIN`               | Cookie domain override                                    | (unset)                          |
+| `api.env.CLIENT_IP_HEADER`            | Header the client IP for the rate limit is read from      | (unset, `X-Forwarded-For`)       |
+| `api.env.TRUSTED_PROXIES`             | Proxies skipped in an `X-Forwarded-For` chain (CSV)       | (unset)                          |
+| `api.env.GIT_WEBHOOK_BASE_URL`        | Public origin for incoming Git webhooks                   | (unset, uses `API_URL`)          |
 | `api.env.S3_BUCKET`                   | S3 bucket name                                            | `""`                             |
 | `api.env.S3_REGION`                   | S3 region                                                 | `us-east-1`                      |
 | `api.env.S3_FORCE_PATH_STYLE`         | S3 path-style access                                      | `"true"`                         |
@@ -197,6 +212,10 @@ bot:
 | `api.healthcheck.periodSeconds`       | Probe period                                              | `15`                             |
 | `api.healthcheck.timeoutSeconds`      | Probe timeout                                             | `5`                              |
 | `api.healthcheck.failureThreshold`    | Probe failure threshold                                   | `5`                              |
+| `api.backups.persistence.enabled`     | Keep the pre-migration dump on a volume                   | `false`                          |
+| `api.backups.persistence.size`        | Backup volume size                                        | `10Gi`                           |
+| `api.backups.persistence.storageClass` | Backup volume storage class                              | `""`                             |
+| `api.backups.persistence.accessMode`  | Backup volume access mode                                 | `ReadWriteOnce`                  |
 
 ### Web
 
@@ -281,8 +300,8 @@ bot:
 | `secrets.postgresPassword`    | PostgreSQL password                       | `""`    |
 | `secrets.betterAuthSecret`    | better-auth secret                        | `""`    |
 | `secrets.appEncryptionKey`    | AES encryption key for secrets at rest    | `""`    |
-| `secrets.s3AccessKeyId`       | S3 access key (also MinIO root user)      | `""`    |
-| `secrets.s3SecretAccessKey`   | S3 secret key (also MinIO root password)  | `""`    |
+| `secrets.s3AccessKeyId`       | S3 access key (also RustFS root user)     | `""`    |
+| `secrets.s3SecretAccessKey`   | S3 secret key (also RustFS root password) | `""`    |
 
 ### External services
 
@@ -308,16 +327,14 @@ bot:
 | `postgresql.tolerations`              | Tolerations                                | `[]`        |
 | `postgresql.affinity`                 | Affinity                                   | `{}`        |
 
-### MinIO
+### Object store (RustFS)
 
 | Key                              | Description                             | Default                        |
 |----------------------------------|-----------------------------------------|--------------------------------|
-| `minio.enabled`                  | Deploy MinIO in-cluster                 | `true`                         |
+| `minio.enabled`                  | Deploy RustFS in-cluster                | `true`                         |
 | `minio.bucket`                   | Bucket name to create                   | `planner-attachments`          |
-| `minio.image.repository`         | Image repository                        | `minio/minio`                  |
-| `minio.image.tag`                | Image tag                               | `RELEASE.2025-04-22T22-12-26Z` |
-| `minio.mcImage.repository`       | MinIO Client image repository           | `minio/mc`                     |
-| `minio.mcImage.tag`              | MinIO Client image tag                  | `RELEASE.2025-04-16T18-13-36Z` |
+| `minio.image.repository`         | Image repository                        | `rustfs/rustfs`                |
+| `minio.image.tag`                | Image tag                               | `1.0.0`                        |
 | `minio.persistence.size`         | PVC size                                | `20Gi`                         |
 | `minio.persistence.storageClass` | Storage class (empty = cluster default) | `""`                           |
 | `minio.resources`                | CPU/memory requests and limits          | `{}`                           |

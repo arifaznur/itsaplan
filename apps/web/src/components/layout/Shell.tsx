@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useInitiativeOptionsQuery } from '@/services/initiatives.service';
 import { useIssueBySeqQuery } from '@/services/issues.service';
+import { useTeamsQuery } from '@/services/teams.service';
 import { useAccountPreferences } from '@/services/preferences.service';
 import type { IssueOpenMode } from '@/lib/api/endpoints/userPreferences';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -12,10 +13,13 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { useSettingsNavGroups } from '@/hooks/useSettingsNavGroups';
 import { useShellProject } from '@/hooks/useShellProject';
 import { useShellRoute } from '@/hooks/useShellRoute';
+import { useShellTitle } from '@/hooks/useShellTitle';
+import { useAppBadge } from '@/hooks/useAppBadge';
 import { useProjectRouteSync } from '@/hooks/useProjectRouteSync';
 import { projectPath, issuePath } from '@/utils/paths';
 import { defaultsFromFilters, type NewIssueDefaults } from '@/utils/project';
-import { ShellCtx, type ShellContext } from '@/context/shellContext';
+import { IssueRefsProvider } from '@/context/issueRefs';
+import { IssueOpenerCtx, ShellCtx, type ShellContext } from '@/context/shellContext';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import AppSidebar from '@/components/layout/AppSidebar';
 import AppHeader from '@/components/layout/AppHeader';
@@ -26,8 +30,9 @@ import ShellOverlays from '@/components/layout/ShellOverlays';
 import { ChatPanel } from '@/features/ai-chat/components/panel/ChatPanel';
 import { useChatPanel } from '@/features/ai-chat/hooks/useChatPanel';
 import { useTranslations } from 'next-intl';
+import { ShellNotice } from '@/cloud';
 
-// The layout for /project/:projectKey and its children (the work items view and the
+// The layout for /:team/:projectKey and its children (the work items view and the
 // settings pages). It owns the project data, the view editor and the
 // project-level overlays, renders the sidebar + header chrome, and passes the
 // project state to the active child through React context (see lib/shellContext).
@@ -49,12 +54,29 @@ export default function Shell({
     project,
     filteredProject,
     views,
+    viewsFailed,
     editor,
     customFields,
     canCreateIssue,
     errorMsg,
     forbidden,
   } = useShellProject(projectKey, route.activeViewId);
+  useAppBadge();
+  const projectName = project?.project.name ?? t('project');
+  // A failed read keeps the last data, so a project that became unreadable is named
+  // generically.
+  const unreadable = forbidden || !!errorMsg;
+  useShellTitle(
+    route,
+    unreadable ? t('project') : projectName,
+    unreadable || viewsFailed ? [] : views,
+    project,
+  );
+  const teamId = project?.project.teamId;
+  const issueRefs = useMemo(
+    () => projects.filter((item) => item.teamId === teamId).map((item) => item.ref),
+    [projects, teamId],
+  );
 
   const initiativeOptions = useInitiativeOptionsQuery(projectKey).data ?? [];
   const { issueOpenMode, showChatByDefault } = useAccountPreferences();
@@ -68,6 +90,11 @@ export default function Shell({
   const chatAvailable = !!projectKey && can('ai_agents', 'read');
   const canCreateInitiative = !!project?.project.initiativesEnabled && can('initiatives', 'create');
   const issueQuery = useIssueBySeqQuery(projectKey, routeIssueSeq);
+  // A project is created in a team by its owner or manager: the current project's team
+  // when the user ranks so there, otherwise the first team they do.
+  const managedTeams = (useTeamsQuery().data ?? []).filter((one) => one.role !== 'member');
+  const newProjectTeamId = (managedTeams.find((one) => one.id === teamId) ?? managedTeams[0])?.id;
+  const openNewProject = newProjectTeamId != null ? () => overlays.setShowNewProject(true) : null;
 
   useProjectRouteSync({ projects, projectsLoaded, projectKey });
 
@@ -106,7 +133,7 @@ export default function Shell({
     onChangeView: editor.changeView,
     onNewIssue: () => canCreateIssue && openNewIssue(),
     onNewInitiative: () => canCreateInitiative && overlays.setShowNewInitiative(true),
-    onNewProject: () => overlays.setShowNewProject(true),
+    onNewProject: () => openNewProject?.(),
     onSettings: () => firstSettingsHref && router.push(firstSettingsHref),
     onToggleChat: chatPanel.toggle,
   });
@@ -118,18 +145,24 @@ export default function Shell({
   // while the URL addresses an issue by its project-scoped number, so the page route
   // resolves the number first and falls back to the panel when the issue is not on
   // the loaded board.
-  const openIssue = (id: number, mode: IssueOpenMode = issueOpenMode) => {
-    if (mode === 'page' && projectKey) {
-      const seq = project?.issues.find((i) => i.id === id)?.sequenceNumber;
-      if (seq != null) {
-        router.push(issuePath(projectKey, seq));
-        return;
+  // A stable callback: the views memoize their cards, and opening or closing the
+  // panel renders the Shell again.
+  const { setOpenIssueId } = overlays;
+  const openIssue = useCallback(
+    (id: number, mode: IssueOpenMode = issueOpenMode) => {
+      if (mode === 'page' && projectKey) {
+        const seq = project?.issues.find((i) => i.id === id)?.sequenceNumber;
+        if (seq != null) {
+          router.push(issuePath(projectKey, seq));
+          return;
+        }
       }
-    }
-    // The issue the panel already shows closes it, so the card that opened the panel
-    // is the one that puts it away.
-    overlays.setOpenIssueId((current) => (current === id ? null : id));
-  };
+      // The issue the panel already shows closes it, so the card that opened the
+      // panel is the one that puts it away.
+      setOpenIssueId((current) => (current === id ? null : id));
+    },
+    [issueOpenMode, projectKey, project, router, setOpenIssueId],
+  );
 
   const context: ShellContext = {
     project,
@@ -147,88 +180,97 @@ export default function Shell({
 
   return (
     <ShellCtx.Provider value={context}>
-      <SidebarProvider defaultOpen={defaultSidebarOpen} className="h-svh overflow-hidden">
-        <AppSidebar
-          projects={projects}
-          currentProjectKey={projectKey}
-          onSelectProject={(key) => router.push(projectPath(key))}
-          onNewTeam={() => overlays.setShowNewTeam(true)}
-        />
-        <SidebarInset className="min-w-0">
-          <AppHeader
-            title={
-              <ShellHeaderTitle
-                route={route}
-                projectName={project?.project.name ?? t('project')}
-                issueIdentifier={issueQuery.data?.identifier ?? null}
-                issueParent={issueQuery.data?.parent ?? null}
-              />
-            }
-            hasProject={!!project}
-            onOpenCommand={() => overlays.setShowCommand(true)}
+      <IssueOpenerCtx.Provider value={openIssue}>
+        <SidebarProvider defaultOpen={defaultSidebarOpen} className="h-svh overflow-hidden">
+          <AppSidebar
+            projects={projects}
+            currentProjectKey={projectKey}
+            onSelectProject={(key) => router.push(projectPath(key))}
+          />
+          <SidebarInset className="min-w-0">
+            <AppHeader
+              title={
+                <ShellHeaderTitle
+                  route={route}
+                  projectName={projectName}
+                  issueIdentifier={issueQuery.data?.identifier ?? null}
+                  issueParent={issueQuery.data?.parent ?? null}
+                />
+              }
+              hasProject={!!project}
+              onOpenCommand={() => overlays.setShowCommand(true)}
+              onNewIssue={openNewIssue}
+              chatActive={chatPanel.open}
+              onToggleChat={chatPanel.toggle}
+            />
+            <ShellNotice />
+
+            {errorMsg && !forbidden && (
+              <div className="border-b border-destructive/50 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+                {errorMsg}
+              </div>
+            )}
+
+            <div className="relative flex min-h-0 flex-1 overflow-hidden">
+              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <ShellBody
+                  forbidden={forbidden}
+                  hasProject={!!project}
+                  hasError={!!errorMsg}
+                  projectsLoaded={projectsLoaded}
+                  projectCount={projects.length}
+                >
+                  <IssueRefsProvider refs={issueRefs}>{children}</IssueRefsProvider>
+                </ShellBody>
+              </div>
+
+              {chatAvailable && projectKey && (
+                <ChatPanel
+                  projectKey={projectKey}
+                  open={chatPanel.open}
+                  mode={chatPanel.mode}
+                  fullscreen={chatPanel.fullscreen}
+                  onToggleMode={chatPanel.toggleMode}
+                  onToggleFullscreen={chatPanel.toggleFullscreen}
+                  onClose={chatPanel.toggle}
+                  newChatAgentId={chatAgentId}
+                  onNewChatHandled={() => setChatAgentId(null)}
+                />
+              )}
+            </div>
+          </SidebarInset>
+
+          <CommandLayer
+            open={overlays.showCommand}
+            onOpenChange={overlays.setShowCommand}
+            projects={projects}
+            currentProjectKey={projectKey}
+            onBoard={route.onBoard}
+            view={editor.view}
+            currentIssueId={currentIssueId}
+            onViewChange={editor.changeView}
             onNewIssue={openNewIssue}
-            chatActive={chatPanel.open}
+            // Handled by the kanban board's selection provider (mounted only on the
+            // board); the constant matches BOARD_SELECT_ALL_EVENT in useSelection.
+            onSelectAll={() => window.dispatchEvent(new Event('board:select-all'))}
+            onNewInitiative={() => overlays.setShowNewInitiative(true)}
+            onNewProject={openNewProject}
+            onSelectProject={(key) => router.push(projectPath(key))}
+            onOpenIssue={(seq) => projectKey && router.push(issuePath(projectKey, seq))}
+            onIssueDeleted={onIssueDeleted}
             onToggleChat={chatPanel.toggle}
           />
 
-          {errorMsg && !forbidden && (
-            <div className="border-b border-destructive/50 bg-destructive/10 px-4 py-2 text-sm text-destructive">
-              {errorMsg}
-            </div>
-          )}
-
-          <div className="relative flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              <ShellBody
-                forbidden={forbidden}
-                hasProject={!!project}
-                hasError={!!errorMsg}
-                projectsLoaded={projectsLoaded}
-                projectCount={projects.length}
-              >
-                {children}
-              </ShellBody>
-            </div>
-
-            {chatAvailable && projectKey && (
-              <ChatPanel
-                projectKey={projectKey}
-                open={chatPanel.open}
-                mode={chatPanel.mode}
-                fullscreen={chatPanel.fullscreen}
-                onToggleMode={chatPanel.toggleMode}
-                onToggleFullscreen={chatPanel.toggleFullscreen}
-                onClose={chatPanel.toggle}
-                newChatAgentId={chatAgentId}
-                onNewChatHandled={() => setChatAgentId(null)}
-              />
-            )}
-          </div>
-        </SidebarInset>
-
-        <CommandLayer
-          open={overlays.showCommand}
-          onOpenChange={overlays.setShowCommand}
-          projects={projects}
-          currentProjectKey={projectKey}
-          onBoard={route.onBoard}
-          view={editor.view}
-          currentIssueId={currentIssueId}
-          onViewChange={editor.changeView}
-          onNewIssue={openNewIssue}
-          // Handled by the kanban board's selection provider (mounted only on the
-          // board); the constant matches BOARD_SELECT_ALL_EVENT in useSelection.
-          onSelectAll={() => window.dispatchEvent(new Event('board:select-all'))}
-          onNewInitiative={() => overlays.setShowNewInitiative(true)}
-          onNewProject={() => overlays.setShowNewProject(true)}
-          onSelectProject={(key) => router.push(projectPath(key))}
-          onOpenIssue={(seq) => projectKey && router.push(issuePath(projectKey, seq))}
-          onIssueDeleted={onIssueDeleted}
-          onToggleChat={chatPanel.toggle}
-        />
-
-        <ShellOverlays project={project} projectKey={projectKey} overlays={overlays} />
-      </SidebarProvider>
+          <IssueRefsProvider refs={issueRefs}>
+            <ShellOverlays
+              project={project}
+              projectKey={projectKey}
+              newProjectTeamId={newProjectTeamId}
+              overlays={overlays}
+            />
+          </IssueRefsProvider>
+        </SidebarProvider>
+      </IssueOpenerCtx.Provider>
     </ShellCtx.Provider>
   );
 }

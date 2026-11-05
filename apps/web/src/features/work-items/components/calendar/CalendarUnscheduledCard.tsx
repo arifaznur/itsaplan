@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import type { ProjectDetail } from '@/lib/api/endpoints/projects';
 import type { Issue } from '@/lib/api/endpoints/issues';
@@ -6,8 +7,9 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 import IssueContextMenu from '@/features/issue/components/actions/IssueContextMenu';
 
-// A draggable card in the unscheduled panel.
-export function CalendarUnscheduledCard({
+// A draggable card in the unscheduled panel. Memoized because the panel renders
+// again on every scroll step.
+export const CalendarUnscheduledCard = memo(function CalendarUnscheduledCard({
   project,
   issue,
   color,
@@ -18,9 +20,8 @@ export function CalendarUnscheduledCard({
   color: string;
   onOpen: (id: number) => void;
 }) {
-  // Drag is disabled on phones so a touch scrolls instead of picking up the issue
-  // (see the `sm:touch-none` below), and without work_items edit (scheduling a
-  // issue by dropping it on a day is an issue edit).
+  // Drag is disabled on phones, and without work_items edit (scheduling an issue
+  // by dropping it on a day is an issue edit).
   const { can } = usePermissions();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: issue.id,
@@ -37,7 +38,7 @@ export function CalendarUnscheduledCard({
           onOpen(issue.id);
         }}
         className={cn(
-          'kanban-card flex cursor-pointer items-center gap-2 rounded-md p-2 text-xs sm:touch-none',
+          'kanban-card flex cursor-pointer items-center gap-2 rounded-md p-2 text-xs',
           isDragging && 'opacity-40',
         )}
       >
@@ -50,4 +51,4 @@ export function CalendarUnscheduledCard({
       </div>
     </IssueContextMenu>
   );
-}
+});

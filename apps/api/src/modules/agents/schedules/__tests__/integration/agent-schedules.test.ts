@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from 'bun:test';
-import { apiKeyApi, authedApi, type Api } from '#tests/helpers/app';
+import { apiKeyApi, authedApi, type Api, createProject } from '#tests/helpers/app';
 import { signUpTestUser } from '#tests/helpers/auth';
 import { resetDb } from '#tests/helpers/db';
 import { untaggedRoutes } from '#tests/helpers/mcp';
@@ -8,14 +8,14 @@ import { clearLimits, setLimits } from '#tests/helpers/limits';
 
 // A schedule sends a fixed task to an internal agent on a cron, in UTC. The worker
 // picks up the queued runs, so a run created here stays pending. Access is the
-// ai_agents permission resource.
+// agent_schedules permission resource.
 
 const schedules = (api: Api, projectKey = 'MKT') => api.projects({ projectKey })['agent-schedules'];
 
 async function setup() {
   const owner = await signUpTestUser({ name: 'Owner' });
   const asOwner = authedApi(owner.cookie);
-  await asOwner.projects.post({ key: 'MKT', name: 'Marketing' });
+  await createProject(asOwner, { key: 'MKT', name: 'Marketing' });
   return { asOwner };
 }
 
@@ -110,7 +110,7 @@ describe('agent schedules', () => {
       lastRunAt: null,
       lastRunStatus: null,
     });
-    expect(new Date(created.data!.nextRunAt).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(created.data!.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
 
     const list = await schedules(asOwner).get();
     expect(list.status).toBe(200);
@@ -220,7 +220,7 @@ describe('agent schedules', () => {
   it('rejects an agent of another project', async () => {
     const { asOwner } = await setup();
 
-    await asOwner.projects.post({ key: 'ENG', name: 'Engineering' });
+    await createProject(asOwner, { key: 'ENG', name: 'Engineering' });
     const foreignId = await makeAgent(asOwner, { username: 'eng', projectKey: 'ENG' });
     expect((await createSchedule(asOwner, foreignId)).status).toBe(400);
   });
@@ -234,13 +234,25 @@ describe('agent schedules', () => {
     const paused = await schedules(asOwner)({ scheduleId }).patch({ status: 'paused' });
     expect(paused.status).toBe(200);
     expect(paused.data).toMatchObject({ status: 'paused' });
-    expect(new Date(paused.data!.nextRunAt).getTime()).toBe(
-      new Date(created.data!.nextRunAt).getTime(),
+    expect(new Date(paused.data!.nextRunAt!).getTime()).toBe(
+      new Date(created.data!.nextRunAt!).getTime(),
     );
 
     const resumed = await schedules(asOwner)({ scheduleId }).patch({ status: 'active' });
     expect(resumed.data).toMatchObject({ status: 'active' });
-    expect(new Date(resumed.data!.nextRunAt).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(resumed.data!.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('keeps a paused schedule paused when a patch leaves the status out', async () => {
+    const { asOwner } = await setup();
+    const agentId = await makeAgent(asOwner);
+    const created = await createSchedule(asOwner, agentId);
+    const schedule = schedules(asOwner)({ scheduleId: created.data!.id });
+    expect((await schedule.patch({ status: 'paused' })).data?.status).toBe('paused');
+
+    const edited = await schedule.patch({ prompt: 'Triage the new issues.' });
+    expect(edited.status).toBe(200);
+    expect(edited.data?.status).toBe('paused');
   });
 
   it('recomputes the next run when the cron changes', async () => {
@@ -256,7 +268,7 @@ describe('agent schedules', () => {
       cron: '30 9 * * *',
       prompt: 'Triage and label the new issues.',
     });
-    expect(new Date(updated.data!.nextRunAt).getUTCMinutes()).toBe(30);
+    expect(new Date(updated.data!.nextRunAt!).getUTCMinutes()).toBe(30);
   });
 
   it('queues a manual run and reports it in the run history', async () => {

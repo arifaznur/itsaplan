@@ -4,6 +4,11 @@
   "copyKey": "المفتاح",
   "description": "الوصف",
   "issueTypes": "أنواع المهام",
+  "templates": "القوالب",
+  "blank": "مشروع فارغ",
+  "blankHint": "الحالات الافتراضية وأنواع المهام التي تختارها",
+  "startFrom": "البدء من",
+  "continue": "متابعة",
   "typesCreated": "{count, plural, zero {مش هيتعمل أنواع مهام} one {هيتعمل نوع مهمة واحد} two {هيتعمل نوعين مهام} few {هيتعمل # أنواع مهام} many {هيتعمل # نوع مهمة} other {هيتعمل # نوع مهمة}}",
   "defaultType": "المهام الجديدة بتاخد {type} افتراضيًا. تقدر تعدّل الأنواع من الإعدادات.",
   "presets": {
@@ -33,9 +38,10 @@
     "issueTypes": "أنواع المهام",
     "labels": "الوسوم",
     "customFields": "الحقول المخصّصة",
+    "issueTemplates": "قوالب المهام",
     "views": "العروض",
     "dashboards": "لوحات المعلومات",
-    "documents": "Docs",
+    "documents": "المستندات",
     "actions": "الإجراءات",
     "configuration": "التهيئة",
     "webhooks": "خطافات الويب (webhooks)",
@@ -46,5 +52,6 @@
   "copyTitle": "نسخ المشروع \"{name}\"",
   "create": "إنشاء مشروع",
   "copyAction": "نسخ المشروع",
+  "defaultAgents": "الوكلاء الذين سينضمون إلى هذا المشروع: {names}",
   "copyName": "نسخة {name}"
 }

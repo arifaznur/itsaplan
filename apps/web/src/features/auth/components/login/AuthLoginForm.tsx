@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import {
@@ -36,7 +36,8 @@ import { useRedirectError } from '../../hooks/useRedirectError';
 // since they need neither field.
 type Method = 'password' | 'link';
 
-export default function AuthLoginForm() {
+// `title` replaces "Sign in" on a sign-in page under a name of its own (/login/<name>).
+export default function AuthLoginForm({ title }: { title?: string }) {
   const t = useTranslations('auth');
   const [method, setMethod] = useState<Method>('password');
   // With a password this is either an address or a username; a sign-in link can only
@@ -61,14 +62,20 @@ export default function AuthLoginForm() {
   // `apiFailure` in lib/api/core/client.ts sends the browser here with ?expired=1 after the API
   // refused the session, so the screen can say why the user is back on it.
   const sessionExpired = params.get('expired') === '1';
-  // A Google sign-in or a confirmation link that could not complete comes back here
-  // as a redirect rather than as a rejected promise, so its reason arrives in the
-  // query string.
+  // A Google, OIDC or magic-link sign-in, or a confirmation link, that could not
+  // complete comes back here as a redirect rather than as a rejected promise, so its
+  // reason arrives in the query string.
   const redirectErrorMessage = useRedirectError();
-  const redirectError = redirectErrorMessage(params.get('error'), params.get('error_description'));
+  const redirectError = redirectErrorMessage(params.get('error'));
   // The confirmation link carries ?verified=1 and adds ?error=… when it failed, so
   // the success line only stands while there is no error next to it.
   const justVerified = params.get('verified') === '1' && !redirectError;
+
+  const router = useRouter();
+  // A fresh instance has nobody to sign in: the first account is created on sign-up.
+  useEffect(() => {
+    if (authConfig?.hasUsers === false) router.replace('/register');
+  }, [authConfig?.hasUsers, router]);
 
   function switchTo(next: Method) {
     setMethod(next);
@@ -140,7 +147,7 @@ export default function AuthLoginForm() {
   return (
     <form onSubmit={onSubmit} className="p-6 md:p-8">
       <FieldGroup>
-        <AuthFormHeader title={t('login.title')} description={subtitle()} />
+        <AuthFormHeader title={title ?? t('login.title')} description={subtitle()} />
 
         {passwordEnabled && (
           <AuthLoginPasswordFields

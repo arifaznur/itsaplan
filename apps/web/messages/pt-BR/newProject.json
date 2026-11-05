@@ -4,6 +4,11 @@
   "copyKey": "Chave",
   "description": "Descrição",
   "issueTypes": "Tipos de issue",
+  "templates": "Modelos",
+  "blank": "Projeto em branco",
+  "blankHint": "Estados padrão e os tipos de issue que você escolher",
+  "startFrom": "Começar de",
+  "continue": "Continuar",
   "typesCreated": "{count, plural, one {# tipo de issue} other {# tipos de issue}} serão criados",
   "defaultType": "Novas issues recebem {type} por padrão. Tipos são editáveis nas configurações.",
   "presets": {
@@ -33,9 +38,10 @@
     "issueTypes": "Tipos de issue",
     "labels": "Etiquetas",
     "customFields": "Campos personalizados",
+    "issueTemplates": "Modelos de issue",
     "views": "Visões",
     "dashboards": "Dashboards",
-    "documents": "Docs",
+    "documents": "Documentos",
     "actions": "Ações",
     "configuration": "Configuração",
     "webhooks": "Webhooks",
@@ -46,5 +52,6 @@
   "copyTitle": "Copiar projeto \"{name}\"",
   "create": "Criar projeto",
   "copyAction": "Copiar projeto",
+  "defaultAgents": "Agentes que entrarão neste projeto: {names}",
   "copyName": "{name} cópia"
 }

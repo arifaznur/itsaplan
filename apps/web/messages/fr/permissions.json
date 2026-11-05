@@ -6,7 +6,7 @@
     "initiatives": "Initiatives",
     "cycles": "Cycles",
     "dashboards": "Tableaux de bord",
-    "documents": "Docs",
+    "documents": "Documents",
     "views": "Vues de tickets",
     "members_invite": "Invitations",
     "members_manage": "Membres",
@@ -14,15 +14,19 @@
     "issue_types": "Types de tickets",
     "labels": "Étiquettes",
     "ai_agents": "Agents IA",
+    "agent_schedules": "Planifications des agents",
     "integrations": "Intégrations",
     "agent_skills": "Compétences des agents",
     "agent_tools": "Outils des agents",
+    "agent_usage": "Consommation des agents",
     "custom_fields": "Champs personnalisés",
     "issue_templates": "Modèles de tickets",
     "workflow_config": "Configuration du flux de travail",
     "actions": "Actions",
     "webhooks": "Webhooks",
+    "repositories": "Dépôts",
     "note_boards": "Tableaux de notes",
+    "import_export": "Import/Export",
     "danger_zone": "Zone sensible"
   },
   "actions": {
@@ -34,7 +38,7 @@
   "groups": {
     "workItems": "Tickets",
     "dashboards": "Tableaux de bord",
-    "documents": "Docs",
+    "documents": "Documents",
     "notes": "Notes",
     "ai": "IA",
     "configuration": "Configuration",
@@ -46,5 +50,16 @@
   "allowed": "autorisé",
   "notAllowed": "non autorisé",
   "accessHeading": "Accès à ce projet",
-  "joined": "arrivé {date}"
+  "joined": "arrivé {date}",
+  "editor": {
+    "titleEdit": "Modifier le rôle",
+    "titleNew": "Nouveau rôle",
+    "namePlaceholder": "ex. Contributeur",
+    "toggleActionAll": "Basculer {action} pour toutes les ressources",
+    "toggleGroupAll": "Basculer toutes les permissions de {group}",
+    "toggleActionGroup": "Basculer {action} pour {group}",
+    "cellAria": "{resource} : {action}",
+    "saveRole": "Enregistrer le rôle",
+    "createRole": "Créer le rôle"
+  }
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { JSONContent } from '@tiptap/core';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Color from '@tiptap/extension-color';
@@ -20,12 +21,22 @@ import { Markdown } from 'tiptap-markdown';
 import EditorSelectionMenu from '@/components/common/editor/EditorSelectionMenu';
 import EditorTableMenu from '@/components/common/editor/EditorTableMenu';
 import EditorLinkPreview from '@/components/common/editor/EditorLinkPreview';
+import { IssueRef } from '@/components/common/editor/issueRefDecorations';
+import { refreshDecorations } from '@/components/common/editor/refreshDecorations';
+import { useIssueRefs } from '@/context/issueRefs';
 import { createLinkKeyboardHandlers } from '@/components/common/editor/linkKeyboardHandlers';
 import { openLinkOnModifierClick } from '@/components/common/editor/modifierClickLink';
 import { ResizableImage } from '@/components/common/editor/tiptap-image';
 import { MarkdownTable } from '@/components/common/editor/tiptap-table';
 import { pasteMarkdown } from '@/components/common/editor/pasteMarkdown';
+import { useDocumentAnchor } from '../hooks/useDocumentAnchor';
+import { DocumentBlockId } from '../extensions/documentBlockId';
+import DocumentBlockMenu from './DocumentBlockMenu';
+import DocumentSelectionActions, { type DocumentSelection } from './DocumentSelectionActions';
 import { SlashCommand } from '@/lib/tiptap-slash-command';
+import { Mention, type MentionOptions } from '@/lib/tiptap-mention';
+import { useMentionCandidates, useMentionNames } from '@/hooks/useMentionCandidates';
+import { useSession } from '@/lib/auth-client';
 
 const lowlight = createLowlight(common);
 const DOCUMENT_ASSET_PATH =
@@ -72,12 +83,17 @@ type EditorLabels = {
 
 type EditorValue = { markdown: string; json: JSONContent };
 
-export function documentEditorExtensions(labels: EditorLabels) {
+// Without `mentions` the mention node is still known, so a page that holds one parses,
+// but typing "@" offers nobody.
+export function documentEditorExtensions(labels: EditorLabels, mentions?: MentionOptions) {
   return [
+    DocumentBlockId,
     StarterKit.configure({
       codeBlock: false,
       link: false,
       heading: { levels: [1, 2, 3, 4, 5, 6] },
+      // Its paragraph is added before collab starts, so the server copy never gets it.
+      trailingNode: false,
     }),
     CodeBlockLowlight.configure({ lowlight }),
     Placeholder.configure({ placeholder: labels.placeholder }),
@@ -97,6 +113,7 @@ export function documentEditorExtensions(labels: EditorLabels) {
     Color,
     Highlight.configure({ multicolor: true }),
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    mentions ? Mention.configure(mentions) : Mention,
     SlashCommand.configure({
       codeBlockLabel: labels.codeBlockLabel,
       tableLabel: labels.tableLabel,
@@ -112,9 +129,13 @@ function editorValue(editor: Editor): EditorValue {
 }
 
 export default function DocumentMarkdownEditor({
+  projectKey,
+  documentId,
+  onComment,
   defaultValue,
   defaultJson,
   editable,
+  collaborative = false,
   placeholder,
   className,
   onReady,
@@ -123,9 +144,13 @@ export default function DocumentMarkdownEditor({
   onPickImage,
   onUploadImage,
 }: {
+  projectKey?: string;
+  documentId?: number;
+  onComment?: (selection: DocumentSelection) => void;
   defaultValue: string;
   defaultJson: Record<string, unknown> | null;
   editable: boolean;
+  collaborative?: boolean;
   placeholder: string;
   className?: string;
   onReady: (editor: Editor | null) => void;
@@ -135,35 +160,71 @@ export default function DocumentMarkdownEditor({
   onUploadImage?: (file: File) => Promise<{ url: string; filename: string }>;
 }) {
   const t = useTranslations('documents.toolbar');
+  const router = useRouter();
+  const issueRefs = useIssueRefs();
   const editorRef = useRef<Editor | null>(null);
   const linkKeyboardHandlers = useMemo(createLinkKeyboardHandlers, []);
   const editableRef = useRef(editable);
   editableRef.current = editable;
+  // False while the document can be typed into but has no focus: the chip shows,
+  // and swaps for the plain identifier only once editing actually starts.
+  const focusedRef = useRef(false);
+  const [focused, setFocused] = useState(false);
+  const issueRefsRef = useRef(issueRefs);
+  issueRefsRef.current = issueRefs;
+  const openIssueRefRef = useRef(router.push);
+  openIssueRefRef.current = (href: string) => router.push(href);
+  const mentionCandidates = useMentionCandidates(
+    projectKey && documentId ? { projectKey, on: 'document', documentId, place: 'text' } : null,
+  );
+  const mentionCandidatesRef = useRef(mentionCandidates);
+  mentionCandidatesRef.current = mentionCandidates;
+  const mentionNames = useMentionNames();
+  const mentionNamesRef = useRef(mentionNames);
+  mentionNamesRef.current = mentionNames;
+  const { data: session } = useSession();
+  const selfHandle = session?.user.username ?? '';
+  const selfHandleRef = useRef(selfHandle);
+  selfHandleRef.current = selfHandle;
 
   const editor = useEditor({
+    immediatelyRender: false,
     editable,
-    extensions: documentEditorExtensions({
-      placeholder,
-      codeBlockLabel: t('codeBlock'),
-      tableLabel: t('table'),
-      blocks: {
-        paragraph: t('text'),
-        headings: [
-          t('heading1'),
-          t('heading2'),
-          t('heading3'),
-          t('heading4'),
-          t('heading5'),
-          t('heading6'),
-        ],
-        bulletList: t('bulletList'),
-        orderedList: t('numberedList'),
-        taskList: t('todoList'),
-        quote: t('quote'),
-        divider: t('divider'),
+    extensions: documentEditorExtensions(
+      {
+        placeholder,
+        codeBlockLabel: t('codeBlock'),
+        tableLabel: t('table'),
+        blocks: {
+          paragraph: t('text'),
+          headings: [
+            t('heading1'),
+            t('heading2'),
+            t('heading3'),
+            t('heading4'),
+            t('heading5'),
+            t('heading6'),
+          ],
+          bulletList: t('bulletList'),
+          orderedList: t('numberedList'),
+          taskList: t('todoList'),
+          quote: t('quote'),
+          divider: t('divider'),
+        },
+        image: onPickImage ? { label: t('uploadImage'), onPick: onPickImage } : undefined,
       },
-      image: onPickImage ? { label: t('uploadImage'), onPick: onPickImage } : undefined,
-    }),
+      {
+        items: () => mentionCandidatesRef.current,
+        self: () => selfHandleRef.current,
+        name: (handle) => mentionNamesRef.current.get(handle),
+      },
+    ).concat(
+      IssueRef.configure({
+        refs: () => issueRefsRef.current.refs,
+        open: (href) => openIssueRefRef.current(href),
+        rich: () => issueRefsRef.current.resolve && (!editableRef.current || !focusedRef.current),
+      }),
+    ),
     content: defaultJson ?? defaultValue,
     editorProps: {
       handleDOMEvents: linkKeyboardHandlers,
@@ -171,6 +232,9 @@ export default function DocumentMarkdownEditor({
         return openLinkOnModifierClick(event, view.dom);
       },
       attributes: {
+        role: 'textbox',
+        'aria-multiline': 'true',
+        'aria-label': t('editorLabel'),
         class: 'md-content flex-1 focus:outline-none selection:bg-primary/15',
       },
       handlePaste: (_view, event) => {
@@ -207,18 +271,36 @@ export default function DocumentMarkdownEditor({
     onCreate: ({ editor: currentEditor }) => {
       editorRef.current = currentEditor;
     },
-    onUpdate: ({ editor: currentEditor }) => onChange(editorValue(currentEditor)),
-    onBlur: ({ editor: currentEditor }) => onBlur(editorValue(currentEditor)),
+    onUpdate: ({ editor: currentEditor }) => {
+      if (!collaborative) onChange(editorValue(currentEditor));
+    },
+    onFocus: () => {
+      focusedRef.current = true;
+      setFocused(true);
+    },
+    onBlur: ({ editor: currentEditor }) => {
+      focusedRef.current = false;
+      setFocused(false);
+      onBlur(editorValue(currentEditor));
+    },
     onDestroy: () => {
       editorRef.current = null;
     },
   });
+
+  useDocumentAnchor(editor);
 
   useEffect(() => {
     editorRef.current = editor;
     onReady(editor);
     return () => onReady(null);
   }, [editor, onReady]);
+
+  const issueRefList = issueRefs.refs.join(',');
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => refreshDecorations(editor));
+    return () => cancelAnimationFrame(frame);
+  }, [editor, issueRefList, issueRefs.resolve, selfHandle, editable, focused]);
 
   useLayoutEffect(() => {
     syncDocumentEditorEditable(editor, editable);
@@ -227,11 +309,23 @@ export default function DocumentMarkdownEditor({
   if (!editor) return null;
 
   return (
-    <div className={className} data-document-editor="">
-      {editable && <EditorSelectionMenu editor={editor} />}
+    <div className={`relative ${className ?? ''}`} data-document-editor="">
+      {editable && <DocumentBlockMenu editor={editor} />}
+      {editable && (
+        <EditorSelectionMenu editor={editor}>
+          {projectKey && documentId && onComment && (
+            <DocumentSelectionActions
+              editor={editor}
+              projectKey={projectKey}
+              documentId={documentId}
+              onComment={onComment}
+            />
+          )}
+        </EditorSelectionMenu>
+      )}
       {editable && <EditorTableMenu editor={editor} />}
       <EditorContent editor={editor} className="flex min-h-full flex-col" />
-      <EditorLinkPreview editor={editor} />
+      <EditorLinkPreview editor={editor} source={defaultJson ? '' : defaultValue} />
     </div>
   );
 }

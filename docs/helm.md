@@ -1,7 +1,7 @@
 # Deploy on Kubernetes (Helm)
 
 The Helm chart in `charts/itsaplan/` deploys the full stack on any Kubernetes 1.24+ cluster. It runs the published
-images from GHCR, with built-in PostgreSQL and MinIO that can each be swapped for an external service.
+images from GHCR, with built-in PostgreSQL and RustFS that can each be swapped for an external service.
 
 ## Prerequisites
 
@@ -33,7 +33,27 @@ Install the chart:
 helm install itsaplan charts/itsaplan -f values.yaml
 ```
 
-The API applies database migrations on startup. The first account registered becomes the instance admin.
+### Install from the OCI registry
+
+Every release publishes the chart to GHCR, so a clone is optional. The chart version is the release
+version, and `appVersion` inside it is the image tag it deploys:
+
+```bash
+helm install itsaplan oci://ghcr.io/croffasia/charts/itsaplan --version 1.9.0 -f values.yaml
+```
+
+`helm show values oci://ghcr.io/croffasia/charts/itsaplan --version 1.9.0` prints the defaults to start a
+values file from. Only released versions are published, so pin `--version` where the deployment has to
+stay put: in the values file of a GitOps app spec, or in the install command.
+
+For the Pro edition, pass `charts/itsaplan/values-pro.yaml` before it. Without a valid license
+the Pro images run as the core does; the license key is entered in god mode, under **License**.
+
+```bash
+helm install itsaplan charts/itsaplan -f charts/itsaplan/values-pro.yaml -f values.yaml
+```
+
+Each API pod applies the database migrations in its `migrate` init container before the server starts. With several replicas, one applies them and the others wait on a Postgres advisory lock. Worker and bot pods wait in their own init container until the migrations are applied. The first account registered becomes the instance admin.
 
 ## What gets deployed
 
@@ -44,15 +64,16 @@ The API applies database migrations on startup. The first account registered bec
 | Worker            | Deployment                  | always                                |
 | Bot (Telegram)    | Deployment                  | `bot.enabled` (default `true`)        |
 | PostgreSQL        | StatefulSet + Service + PVC | `postgresql.enabled` (default `true`) |
-| MinIO             | Deployment + Service + PVC  | `minio.enabled` (default `true`)      |
-| MinIO bucket init | Job (Helm hook)             | `minio.enabled`                       |
+| RustFS            | Deployment + Service + PVC  | `minio.enabled` (default `true`)      |
+| RustFS bucket init | Job (Helm hook)            | `minio.enabled`                       |
 
 Ingress, TLS certificates, and a ServiceAccount are available but disabled by default.
 
 ## Ingress
 
-The API cannot serve behind a path prefix (better-auth mounts at `/api/auth/*` and treats a path inside `API_URL` as a
-replacement for its base path). The chart offers two modes instead.
+The chart routes the API in one of the two modes below. `API_URL` can also be a path on the web's host (see
+[Where the api lives](self-hosting.md#where-the-api-lives)), but then the proxy has to remove that path before the
+request reaches the api. A standard Ingress has no portable way to do that, so the chart does not template this mode.
 
 ### Separate host
 
@@ -125,7 +146,7 @@ externalDatabase:
 
 ## External S3
 
-Disable the built-in MinIO and point to an external S3-compatible store:
+Disable the built-in RustFS and point to an external S3-compatible store:
 
 ```yaml
 minio:
@@ -145,7 +166,7 @@ secrets:
   s3SecretAccessKey: "..."
 ```
 
-`S3_FORCE_PATH_STYLE` is `false` for AWS and Cloudflare R2, `true` for MinIO.
+`S3_FORCE_PATH_STYLE` is `false` for AWS and Cloudflare R2, `true` for RustFS.
 
 ## Secrets in production
 

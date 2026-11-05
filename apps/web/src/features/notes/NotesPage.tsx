@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useShellRoute } from '@/hooks/useShellRoute';
 import { useTranslations } from 'next-intl';
 import { useQueryClient } from '@tanstack/react-query';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useShell } from '@/context/shellContext';
 import { ApiError } from '@/lib/api/core/client';
 import { usePermissions } from '@/hooks/usePermissions';
+import { titlePath, useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { notePath, notesPath } from '@/utils/paths';
 import { qk } from '@/services/queryKeys';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -34,10 +36,10 @@ const MAX_TABS = 5;
 // full canvas) and moves it to the front.
 export default function NotesPage() {
   const { project } = useShell();
-  const params = useParams<{ projectKey: string; boardId?: string }>();
+  const params = useParams<{ boardId?: string }>();
   const router = useRouter();
   const qc = useQueryClient();
-  const projectKey = params.projectKey;
+  const projectKey = useShellRoute().projectKey ?? '';
   const t = useTranslations('notes');
   const { can } = usePermissions();
 
@@ -65,6 +67,7 @@ export default function NotesPage() {
   const activeBoardId = routeId ?? tabs[0]?.id ?? null;
 
   const { data: activeBoard, isError, error } = useNoteBoardQuery(projectKey, activeBoardId);
+  useDocumentTitle(titlePath(project?.project.name, !isError && activeBoard?.name));
 
   // Record the opened board as most-recent once it loads. Also refreshes its cached
   // tab label and visibility, healing a stale MRU entry (renamed elsewhere).

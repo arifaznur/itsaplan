@@ -1,16 +1,33 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { authedApi, type Api } from '#tests/helpers/app';
+import { apiKeyApi, authedApi, type Api, createProject } from '#tests/helpers/app';
 import { signUpTestUser } from '#tests/helpers/auth';
 import { resetDb } from '#tests/helpers/db';
+import { createAgent } from '#tests/helpers/agents';
+import { addProjectMember } from '#tests/helpers/members';
+import { createRole } from '#tests/helpers/roles';
 import type { WebhookEventType } from '../../service';
+import { onProjectEvent, type ProjectEvent } from '../../emit';
 
 async function setupOwnerProject() {
-  const owner = await signUpTestUser();
+  const owner = await signUpTestUser({ name: 'Owner' });
   const asOwner = authedApi(owner.cookie);
-  const project = await asOwner.projects.post({ key: 'MKT', name: 'Marketing' });
+  const project = await createProject(asOwner, { key: 'MKT', name: 'Marketing' });
   // createProject seeds five default columns; the first is the target for issues.
   const view = await asOwner.projects({ projectKey: 'MKT' }).get();
-  return { asOwner, projectId: project.data!.id, columnId: view.data!.columns[0].id };
+  return {
+    owner,
+    asOwner,
+    projectId: project.data!.id,
+    teamRef: project.data!.teamRef,
+    columnId: view.data!.columns[0].id,
+    columns: view.data!.columns,
+  };
+}
+
+// The payloads queued for a webhook, newest first.
+async function payloads(client: Api, webhookId: number) {
+  const res = await client.webhooks({ webhookId }).deliveries.get();
+  return res.data!.items.map((d) => d.payload as { actor: unknown; data: Record<string, unknown> });
 }
 
 // Registers a webhook on MKT and returns its id.
@@ -178,6 +195,31 @@ describe('webhooks', () => {
     it('returns 404 when patching a missing webhook', async () => {
       const { asOwner } = await setupOwnerProject();
       const res = await asOwner.webhooks({ webhookId: 999999 }).patch({ isActive: false });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('rotate secret', () => {
+    it('replaces the secret and lists the new one', async () => {
+      const { asOwner } = await setupOwnerProject();
+      const created = await asOwner.projects({ projectKey: 'MKT' }).webhooks.post({
+        url: 'https://example.com/hook',
+        events: ['issue.created'],
+      });
+      const webhookId = created.data!.id;
+
+      const rotated = await asOwner.webhooks({ webhookId }).secret.post();
+      expect(rotated.status).toBe(200);
+      expect(rotated.data?.secret).toMatch(/^whsec_/);
+      expect(rotated.data?.secret).not.toBe(created.data!.secret);
+
+      const list = await asOwner.projects({ projectKey: 'MKT' }).webhooks.get();
+      expect(list.data?.[0].secret).toBe(rotated.data!.secret);
+    });
+
+    it('returns 404 for a missing webhook', async () => {
+      const { asOwner } = await setupOwnerProject();
+      const res = await asOwner.webhooks({ webhookId: 999999 }).secret.post();
       expect(res.status).toBe(404);
     });
   });
@@ -378,6 +420,251 @@ describe('webhooks', () => {
     });
   });
 
+  describe('payload', () => {
+    it('names the actor, state, assignee, type, and labels of an issue event', async () => {
+      const { owner, asOwner, columnId, columns } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['issue.assigned']);
+      const label = (
+        await asOwner.projects({ projectKey: 'MKT' }).labels.post({ name: 'bug', color: '#ff0000' })
+      ).data!;
+      const issue = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId, title: 'Task', labelIds: [label.id] })
+      ).data!;
+
+      await asOwner.issues({ issueId: issue.id }).patch({ assigneeUserId: owner.userId });
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload.actor).toEqual({ type: 'human', id: owner.userId, name: 'Owner' });
+      expect(payload.data).toMatchObject({
+        id: issue.id,
+        title: 'Task',
+        assigneeUserId: owner.userId,
+        assignee: { id: owner.userId, name: 'Owner' },
+        delegate: null,
+        state: { id: columnId, name: columns[0].name, type: columns[0].stateType },
+        labels: [{ id: label.id, name: 'bug', color: '#ff0000' }],
+      });
+    });
+
+    it('names the labels a label change added and removed', async () => {
+      const { asOwner, columnId } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['issue.label_changed']);
+      const labels = asOwner.projects({ projectKey: 'MKT' }).labels;
+      const bug = (await labels.post({ name: 'bug' })).data!;
+      const ui = (await labels.post({ name: 'ui' })).data!;
+      const issue = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId, title: 'Task', labelIds: [bug.id] })
+      ).data!;
+
+      await asOwner.issues({ issueId: issue.id }).patch({ labelIds: [ui.id] });
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload.data).toMatchObject({
+        labels: [{ id: ui.id, name: 'ui' }],
+        labelChange: { added: [{ id: ui.id, name: 'ui' }], removed: [{ id: bug.id, name: 'bug' }] },
+      });
+    });
+
+    it('marks an agent as the actor of what it does', async () => {
+      const { asOwner, columnId } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['issue.created']);
+      const created = (
+        await createAgent(asOwner, 'MKT', {
+          name: 'Triage Bot',
+          username: 'triage',
+          kind: 'external',
+        })
+      ).data!;
+
+      const res = await apiKeyApi(created.apiKey!)
+        .projects({ projectKey: 'MKT' })
+        .issues.post({ columnId, title: 'Filed by the agent' });
+      expect(res.status).toBe(201);
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload.actor).toEqual({
+        type: 'agent',
+        id: created.agent.userId,
+        name: 'Triage Bot',
+      });
+    });
+
+    it('carries the issue as it last read on issue.deleted', async () => {
+      const { asOwner, columnId } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['issue.deleted']);
+      const issue = (
+        await asOwner.projects({ projectKey: 'MKT' }).issues.post({ columnId, title: 'Doomed' })
+      ).data!;
+
+      await asOwner.issues({ issueId: issue.id }).delete();
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload).toMatchObject({ action: 'remove', actor: { type: 'human' } });
+      expect(payload.data).toMatchObject({
+        id: issue.id,
+        identifier: issue.identifier,
+        title: 'Doomed',
+        state: { id: columnId },
+      });
+    });
+
+    it('names the issue a comment is on', async () => {
+      const { asOwner, columnId, teamRef } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['comment.created']);
+      const issue = (
+        await asOwner.projects({ projectKey: 'MKT' }).issues.post({ columnId, title: 'Task' })
+      ).data!;
+
+      const comment = (
+        await asOwner.issues({ issueId: issue.id }).comments.post({ body: 'looks good' })
+      ).data!;
+
+      const [payload] = await payloads(asOwner, id);
+      const issueLink = `${process.env.APP_URL}/${teamRef}/issue/${issue.identifier}`;
+      expect(payload.data.url).toBe(`${issueLink}#comment-${comment.id}`);
+      expect(payload.data.issue).toMatchObject({
+        id: issue.id,
+        identifier: issue.identifier,
+        title: 'Task',
+        url: issueLink,
+      });
+    });
+  });
+
+  describe('events without a field edit', () => {
+    it('fires issue.updated on archive and restore', async () => {
+      const { asOwner, columnId } = await setupOwnerProject();
+      const id = await createWebhook(asOwner, ['issue.updated']);
+      const issue = (
+        await asOwner.projects({ projectKey: 'MKT' }).issues.post({ columnId, title: 'Task' })
+      ).data!;
+
+      await asOwner.issues({ issueId: issue.id }).archive.post({});
+      await asOwner.issues({ issueId: issue.id }).restore.post();
+
+      const [restored, archived] = await payloads(asOwner, id);
+      expect(archived.data.archivedAt).not.toBeNull();
+      expect(restored.data.archivedAt).toBeNull();
+    });
+
+    it('fires issue.state_changed for the issues a deleted column moves', async () => {
+      const { asOwner, columns } = await setupOwnerProject();
+      const [from, to] = columns.filter((c) => c.stateType !== 'backlog');
+      const id = await createWebhook(asOwner, ['issue.state_changed']);
+      const issue = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId: from.id, title: 'Task' })
+      ).data!;
+
+      await asOwner
+        .projects({ projectKey: 'MKT' })
+        .columns({ columnId: from.id })
+        .delete({ mode: 'move', targetColumnId: to.id });
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload.data).toMatchObject({ id: issue.id, state: { id: to.id } });
+    });
+
+    it('fires issue.deleted for the issues a deleted column removes', async () => {
+      const { asOwner, columns } = await setupOwnerProject();
+      const column = columns.find((c) => c.stateType !== 'backlog')!;
+      const id = await createWebhook(asOwner, ['issue.deleted']);
+      const issue = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId: column.id, title: 'Task' })
+      ).data!;
+
+      await asOwner
+        .projects({ projectKey: 'MKT' })
+        .columns({ columnId: column.id })
+        .delete({ mode: 'delete' });
+
+      const [payload] = await payloads(asOwner, id);
+      expect(payload.data).toMatchObject({
+        id: issue.id,
+        title: 'Task',
+        state: { id: column.id, name: column.name },
+      });
+    });
+  });
+
+  describe('listeners', () => {
+    it('hands an event to a listener with no webhook subscribed, and loads its payload once', async () => {
+      const { owner, asOwner, projectId, columnId } = await setupOwnerProject();
+      const events: ProjectEvent[] = [];
+      const payloads: unknown[][] = [];
+      const offFirst = onProjectEvent(async (event) => {
+        events.push(event);
+        payloads.push(await event.load());
+      });
+      const offSecond = onProjectEvent(async (event) => {
+        payloads.push(await event.load());
+      });
+      try {
+        const issue = await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId, title: 'Task' });
+
+        expect(events.map((e) => [e.projectId, e.type, e.actor])).toEqual([
+          [projectId, 'issue.created', owner.userId],
+        ]);
+        expect(payloads[0]).toEqual([expect.objectContaining({ id: issue.data!.id })]);
+        expect(payloads[1]).toBe(payloads[0]);
+      } finally {
+        offFirst();
+        offSecond();
+      }
+    });
+
+    it('hands a listener the issues a deleted column removes, with no webhook subscribed', async () => {
+      const { asOwner, columns } = await setupOwnerProject();
+      const column = columns.find((c) => c.stateType !== 'backlog')!;
+      const issue = (
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId: column.id, title: 'Task' })
+      ).data!;
+      const deleted: unknown[] = [];
+      const off = onProjectEvent(async (event) => {
+        if (event.type === 'issue.deleted') deleted.push(...(await event.load()));
+      });
+      try {
+        await asOwner
+          .projects({ projectKey: 'MKT' })
+          .columns({ columnId: column.id })
+          .delete({ mode: 'delete' });
+
+        expect(deleted).toEqual([expect.objectContaining({ id: issue.id })]);
+      } finally {
+        off();
+      }
+    });
+
+    it('keeps the write and the webhooks when a listener throws', async () => {
+      const { asOwner, columnId } = await setupOwnerProject();
+      const webhookId = await createWebhook(asOwner, ['issue.created']);
+      const off = onProjectEvent(async () => {
+        throw new Error('listener down');
+      });
+      try {
+        const res = await asOwner
+          .projects({ projectKey: 'MKT' })
+          .issues.post({ columnId, title: 'Task' });
+
+        expect(res.status).toBe(201);
+        expect(await payloads(asOwner, webhookId)).toHaveLength(1);
+      } finally {
+        off();
+      }
+    });
+  });
+
   describe('access', () => {
     it('returns 404 for an unknown project', async () => {
       const { asOwner } = await setupOwnerProject();
@@ -413,8 +700,42 @@ describe('webhooks', () => {
       const del = await outsider.webhooks({ webhookId }).delete();
       expect(del.status).toBe(403);
 
+      const rotate = await outsider.webhooks({ webhookId }).secret.post();
+      expect(rotate.status).toBe(403);
+
       const deliveries = await outsider.webhooks({ webhookId }).deliveries.get();
       expect(deliveries.status).toBe(403);
+    });
+
+    it('returns the secret only to a caller who may create or edit webhooks', async () => {
+      const { asOwner } = await setupOwnerProject();
+      const webhookId = await createWebhook(asOwner, ['issue.created']);
+
+      const readRole = await createRole(asOwner, 'MKT', {
+        name: 'Webhook reader',
+        permissions: { webhooks: { read: true } },
+      });
+      const asReader = await addProjectMember(asOwner, 'MKT', readRole.data!.id);
+      const read = await asReader.projects({ projectKey: 'MKT' }).webhooks.get();
+      expect(read.status).toBe(200);
+      expect(read.data?.[0]).toMatchObject({ id: webhookId, secret: null });
+      expect((await asReader.webhooks({ webhookId }).secret.post()).status).toBe(403);
+
+      const editRole = await createRole(asOwner, 'MKT', {
+        name: 'Webhook editor',
+        permissions: { webhooks: { read: true, edit: true } },
+      });
+      const asEditor = await addProjectMember(asOwner, 'MKT', editRole.data!.id);
+      const edited = await asEditor.projects({ projectKey: 'MKT' }).webhooks.get();
+      expect(edited.data?.[0].secret).toMatch(/^whsec_/);
+
+      const creatorRole = await createRole(asOwner, 'MKT', {
+        name: 'Webhook creator',
+        permissions: { webhooks: { read: true, create: true } },
+      });
+      const asCreator = await addProjectMember(asOwner, 'MKT', creatorRole.data!.id);
+      const created = await asCreator.projects({ projectKey: 'MKT' }).webhooks.get();
+      expect(created.data?.[0].secret).toMatch(/^whsec_/);
     });
   });
 });
