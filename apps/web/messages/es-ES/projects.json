@@ -1,0 +1,52 @@
+{
+  "editAction": "Editar proyecto",
+  "copyAction": "Duplicar proyecto",
+  "saveTemplateAction": "Guardar como plantilla",
+  "saveTemplate": {
+    "title": "Guardar «{name}» como plantilla",
+    "newTitle": "Nueva plantilla de proyecto",
+    "hint": "La plantilla guarda una copia de los ajustes elegidos. Los cambios posteriores en el proyecto no la modifican. Los documentos, los agentes, las tareas programadas y los webhooks no se guardan.",
+    "teams": "Equipos",
+    "allTeams": "Todos los equipos del espacio de trabajo",
+    "allTeamsHint": "Desactívalo para elegir los equipos que ven esta plantilla al crear un proyecto.",
+    "team": "Equipo",
+    "project": "Proyecto",
+    "chooseTeam": "Elige un equipo",
+    "chooseProject": "Elige un proyecto",
+    "previewEmpty": "Elige un proyecto para ver lo que tendrá la plantilla.",
+    "importTitle": "Importar una plantilla de proyecto",
+    "importHint": "Pega una plantilla copiada de otro espacio de trabajo o sube su archivo. Las personas que nombraba no se incluyen.",
+    "importLabel": "Plantilla",
+    "importPlaceholder": "Pega aquí la plantilla copiada",
+    "importFile": "Subir archivo",
+    "importEmpty": "Pega una plantilla para ver lo que contiene.",
+    "importInvalid": "Esto no es una plantilla de proyecto o está dañada.",
+    "save": "Guardar plantilla",
+    "saved": "Plantilla «{name}» guardada"
+  },
+  "deleteAction": "Eliminar proyecto",
+  "leaveAction": "Abandonar proyecto",
+  "archiveAction": "Archivar proyecto",
+  "restoreAction": "Restaurar proyecto",
+  "archived": "{name} archivado",
+  "restored": "{name} restaurado",
+  "deleteDialog": {
+    "title": "¿Eliminar {name}?",
+    "confirm": "Eliminar definitivamente",
+    "description": "Esto elimina de forma definitiva <strong>{name}</strong> y todo lo que contiene: tickets, comentarios, adjuntos y ajustes. No se puede deshacer.",
+    "typeToConfirm": "Escribe <code>{key}</code> para confirmar."
+  },
+  "leaveDialog": {
+    "title": "¿Abandonar {name}?",
+    "confirm": "Abandonar proyecto",
+    "description": "Perderás el acceso a <strong>{name}</strong> y a sus elementos de trabajo. Para volver a unirte necesitas una nueva invitación de un propietario."
+  },
+  "editDialog": {
+    "title": "Editar proyecto",
+    "key": "Clave",
+    "keyHint": "Los enlaces a incidencias necesitan una clave de letras mayúsculas y dígitos que empiece por una letra. Después de guardarla, la clave no se puede cambiar.",
+    "name": "Nombre",
+    "description": "Descripción",
+    "submit": "Guardar"
+  }
+}

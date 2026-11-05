@@ -81,6 +81,7 @@ export interface PublicAuthConfig {
   // The sign-in button text the operator gave their identity provider. Empty when
   // OIDC is not offered, or when they left it blank.
   oidcLabel: string;
+  hasUsers: boolean;
 }
 
 // Project settings: MCP reachability and the enabled sections. Owner-only; the
@@ -129,6 +130,10 @@ export const getStorageSettings = () => request<StorageSettings>('/settings/stor
 // The instance keyboard shortcuts. The read is open to any signed-in user (every
 // client applies them); the write is god mode.
 export const getHotkeySettings = () => request<HotkeyOverrides>('/settings/hotkeys');
+
+// Whether a team's invite dialog may look up accounts by name or address. The read is
+// open to any signed-in user; the write is god mode.
+export const getInviteSearch = () => request<{ enabled: boolean }>('/settings/invite-search');
 
 // The instance's own sign-in policy, readable without a session: the sign-up
 // screen needs it before an account exists.

@@ -24,7 +24,7 @@ import {
 
 export default function InboxView({ project }: { project: ProjectDetail }) {
   const t = useTranslations('inbox');
-  const projectKey = project.project.key;
+  const projectKey = project.project.ref;
   const projectId = project.project.id;
 
   const { filters, changeFilters } = useInboxFilters(projectKey);
@@ -69,9 +69,11 @@ export default function InboxView({ project }: { project: ProjectDetail }) {
           unread={unreadQuery.data ?? 0}
           filters={filters}
           onFiltersChange={changeFilters}
-          onMarkAllRead={() => markAllRead.mutate()}
-          onDeleteRead={() => deleteNotifications.mutate('read')}
-          onDeleteReadCompleted={() => deleteNotifications.mutate('read-completed')}
+          onMarkAllRead={() => markAllRead.mutate(filters)}
+          onDeleteRead={() => deleteNotifications.mutate({ scope: 'read', filters })}
+          onDeleteCompleted={async () => {
+            await deleteNotifications.mutateAsync({ scope: 'completed', filters });
+          }}
         />
         <InboxList
           items={items}
@@ -89,9 +91,11 @@ export default function InboxView({ project }: { project: ProjectDetail }) {
 
       {selected ? (
         <InboxDetail
-          key={selected.issueId}
+          // A document is keyed by the notification: whether its comments open is read
+          // when it mounts.
+          key={selected.documentId != null ? `notification-${selected.id}` : selected.issueId}
           project={project}
-          issueId={selected.issueId}
+          notification={selected}
           isMobile={isMobile}
           onBack={() => setSelected(null)}
           onDeleted={() => setSelected(null)}

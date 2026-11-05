@@ -6,19 +6,19 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable';
+import { arrayMove, SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable';
 import { LayoutDashboard, Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import type { Dashboard } from '@/lib/api/endpoints/dashboards';
-import { useStripSortSensors } from '@/lib/dnd';
+import { useDndSensors, useDroppedOrder } from '@/lib/dnd';
 import { usePermissions } from '@/hooks/usePermissions';
+import { cn } from '@/lib/utils';
 import DashboardTab from './DashboardTab';
 import DashboardNameDialog from './DashboardNameDialog';
 
 // The row of dashboard tabs. Each named dashboard is a sortable tab; the active
 // one exposes Rename/Delete. A "New dashboard" button and a name dialog handle
-// create/rename. When the project has no dashboards, a single non-clickable
-// "Overview" chip stands in for the built-in default.
+// create/rename. The built-in Overview remains available beside saved dashboards.
 export default function DashboardTabs({
   dashboards,
   activeDashboardId,
@@ -34,20 +34,21 @@ export default function DashboardTabs({
   activeDashboardId: number | null;
   isVirtual: boolean;
   actions?: React.ReactNode;
-  onSelect: (id: number) => void;
+  onSelect: (id: number | null) => void;
   onNewDashboard: (name: string) => void;
   onRename: (d: Dashboard, name: string) => void;
   onDelete: (d: Dashboard) => void;
-  onReorder: (draggedId: number, targetId: number) => void;
+  onReorder: (ids: number[]) => void;
 }) {
   const t = useTranslations('dashboards');
   const { can } = usePermissions();
   const canCreate = can('dashboards', 'create');
   const canEdit = can('dashboards', 'edit');
   const canDelete = can('dashboards', 'delete');
-  const sensors = useStripSortSensors();
+  const sensors = useDndSensors();
   const [activeId, setActiveId] = useState<number | null>(null);
   const dragged = activeId != null ? dashboards.find((d) => d.id === activeId) : null;
+  const { items: shown, drop } = useDroppedOrder(dashboards);
   // Name dialog state: 'new' to create, a dashboard to rename, or null (closed).
   const [dialog, setDialog] = useState<'new' | Dashboard | null>(null);
   const renaming = dialog && dialog !== 'new' ? dialog : null;
@@ -55,18 +56,35 @@ export default function DashboardTabs({
   function handleDragEnd(e: DragEndEvent) {
     setActiveId(null);
     const { active, over } = e;
-    if (over && active.id !== over.id) onReorder(Number(active.id), Number(over.id));
+    if (!over || active.id === over.id) return;
+    const ids = dashboards.map((d) => d.id);
+    const from = ids.indexOf(Number(active.id));
+    const to = ids.indexOf(Number(over.id));
+    if (from === -1 || to === -1) return;
+    const next = arrayMove(ids, from, to);
+    drop(next);
+    onReorder(next);
   }
 
   return (
     <div className="flex items-center gap-1 border-b px-2 py-1.5 sm:px-3">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        {dashboards.length === 0 ? (
-          <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-secondary px-2 py-1 text-sm font-medium text-foreground">
-            <LayoutDashboard className="size-3.5" />
-            {t('defaultName')}
-          </span>
-        ) : (
+        <button
+          type="button"
+          aria-current={isVirtual ? 'page' : undefined}
+          onClick={() => onSelect(null)}
+          className={cn(
+            'flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors',
+            isVirtual
+              ? 'bg-secondary font-medium text-foreground'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+        >
+          <LayoutDashboard className="size-3.5" />
+          {t('defaultName')}
+        </button>
+
+        {dashboards.length > 0 && (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -75,10 +93,10 @@ export default function DashboardTabs({
             onDragEnd={handleDragEnd}
           >
             <SortableContext
-              items={dashboards.map((d) => d.id)}
+              items={shown.map((d) => d.id)}
               strategy={horizontalListSortingStrategy}
             >
-              {dashboards.map((d) => (
+              {shown.map((d) => (
                 <DashboardTab
                   key={d.id}
                   dashboard={d}

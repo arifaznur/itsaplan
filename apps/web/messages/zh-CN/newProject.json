@@ -4,6 +4,11 @@
   "copyKey": "标识",
   "description": "描述",
   "issueTypes": "工作项类型",
+  "templates": "模板",
+  "blank": "空白项目",
+  "blankHint": "默认状态和你选择的工作项类型",
+  "startFrom": "起点",
+  "continue": "继续",
   "typesCreated": "将创建 {count, plural, other {# 个工作项类型}}",
   "defaultType": "新工作项默认使用 {type} 类型，可在设置中编辑。",
   "presets": {
@@ -33,9 +38,10 @@
     "issueTypes": "工作项类型",
     "labels": "标签",
     "customFields": "自定义字段",
+    "issueTemplates": "问题模板",
     "views": "视图",
     "dashboards": "仪表盘",
-    "documents": "Docs",
+    "documents": "文档",
     "actions": "操作",
     "configuration": "配置",
     "webhooks": "Webhook",
@@ -46,5 +52,6 @@
   "copyTitle": "复制项目“{name}”",
   "create": "新建项目",
   "copyAction": "复制项目",
+  "defaultAgents": "将加入此项目的代理：{names}",
   "copyName": "{name} 副本"
 }

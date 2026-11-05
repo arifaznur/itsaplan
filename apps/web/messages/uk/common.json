@@ -101,6 +101,8 @@
     "unreachable": "Не вдалося зв'язатися з агентом. Спробуйте ще раз.",
     "runnerOffline": "Раннер не на зв’язку",
     "runnerOfflineHint": "Запустіть раннер на своїй машині, щоб писати цьому агенту.",
+    "chatDisabled": "Цей агент недоступний у чаті",
+    "chatDisabledHint": "Чат для цього агента вимкнено. Згадки, делегування та розклад, як і раніше, працюють.",
     "attachFile": "Прикріпити таблицю, документ, PDF або текстовий файл для агента",
     "removeAttachment": "Вилучити вкладення",
     "uploadFailed": "Не вдалося завантажити файл.",
@@ -134,7 +136,16 @@
     "stopSharing": "Закрити доступ",
     "createLink": "Створити посилання",
     "copy": "Скопіювати",
-    "copied": "Скопійовано"
+    "copied": "Скопійовано",
+    "calendarFeed": "Стрічка календаря",
+    "calendarFeedHint": "Скопіюйте це посилання в додаток календаря, щоб підписатися на цей вигляд.",
+    "expiry": "Термін дії",
+    "expiryHint": "Після цього посилання перестане працювати.",
+    "neverExpires": "Безстроково",
+    "expiresInDays": "{count, plural, one {Через # день} few {Через # дні} many {Через # днів} other {Через # дня}}",
+    "expiresOn": "До {date}",
+    "expiryPickDate": "Або виберіть останній день:",
+    "expiryFailed": "Не вдалося змінити термін дії посилання. Спробуйте ще раз."
   },
   "actions": "Дії",
   "clearSearch": "Очистити пошук",
@@ -151,7 +162,7 @@
     "initiatives": "Ініціативи",
     "cycles": "Цикли",
     "dashboards": "Дашборди",
-    "documents": "Docs",
+    "documents": "Документи",
     "notes": "Нотатки",
     "subtasks": "Підзадачі",
     "checklists": "Чеклісти",
@@ -188,7 +199,18 @@
     "previewCustomField": "Custom field",
     "previewAllWorkItems": "All work items",
     "previewUpdated": "Updated {date}",
-    "previewOtherValues": "({count} more)"
+    "previewOtherValues": "({count} more)",
+    "previewLink": "Перегляд посилання",
+    "previewLinks": "Перегляд посилань ({count})",
+    "previewNamedLink": "Перегляд: {name}",
+    "backToLinks": "Назад до посилань",
+    "openLink": "Відкрити посилання",
+    "copyLink": "Копіювати посилання",
+    "copiedLink": "Скопійовано",
+    "editLink": "Редагувати посилання",
+    "retryPreview": "Спробувати ще раз",
+    "copyLinkFailed": "Не вдалося скопіювати посилання. Виділіть і скопіюйте URL вище.",
+    "todoList": "Список завдань"
   },
   "chart": {
     "download": "Зберегти графік",
@@ -201,5 +223,7 @@
     "page": "Сторінка {number}",
     "perPage": "на сторінці",
     "range": "{first}-{last} з {total}"
-  }
+  },
+  "aboutCloudAndPro": "Докладніше про Cloud і Pro",
+  "signingOut": "Вихід…"
 }

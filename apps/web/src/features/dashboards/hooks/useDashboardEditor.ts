@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { arrayMove } from '@dnd-kit/sortable';
 import { useTranslations } from 'next-intl';
 import type { Dashboard } from '@/lib/api/endpoints/dashboards';
 import {
@@ -21,8 +20,7 @@ import {
 // Drives the dashboards section: which layout is on screen, its unsaved edits,
 // and the create/rename/delete/reorder writes. The active dashboard comes from
 // the route (activeDashboardId); selecting one is a navigation, not local state.
-// When no dashboard is active (or the project has none) the built-in default
-// layout is shown, and saving it creates the project's first dashboard.
+// Saving the built-in Overview creates a new dashboard.
 export function useDashboardEditor(
   projectKey: string | null,
   dashboards: Dashboard[],
@@ -37,8 +35,10 @@ export function useDashboardEditor(
   const reorderM = useReorderDashboards(projectKey);
 
   const active = dashboards.find((d) => d.id === activeDashboardId) ?? null;
-  const isVirtual = active == null;
-  const baseLayout: DashboardLayout = active ? normalizeLayout(active.layout) : defaultLayout;
+  const isVirtual = activeDashboardId == null;
+  let baseLayout: DashboardLayout = [];
+  if (isVirtual) baseLayout = defaultLayout;
+  else if (active) baseLayout = normalizeLayout(active.layout);
 
   // A draft is scoped to one dashboard (keyed by its id, or 'default' for the
   // virtual one). Navigating to another dashboard changes the key, so the draft
@@ -82,14 +82,13 @@ export function useDashboardEditor(
 
   const discard = () => setDraft(null);
 
-  // Persists the working layout: updates the active dashboard, or creates the
-  // first one (from the default) when the virtual dashboard is on screen.
+  // Saving Overview creates a new dashboard.
   const save = async () => {
     if (isVirtual) {
       const created = await createM.mutateAsync({ input: { name: t('defaultName'), layout } });
       setDraft(null);
       onSelectDashboard(created.id);
-    } else {
+    } else if (active) {
       await updateM.mutateAsync({ id: active.id, input: { layout } });
       setDraft(null);
     }
@@ -115,13 +114,7 @@ export function useDashboardEditor(
     }
   };
 
-  const reorderDashboards = (draggedId: number, targetId: number) => {
-    const ids = dashboards.map((d) => d.id);
-    const from = ids.indexOf(draggedId);
-    const to = ids.indexOf(targetId);
-    if (from === -1 || to === -1 || from === to) return;
-    reorderM.mutate(arrayMove(ids, from, to));
-  };
+  const reorderDashboards = (ids: number[]) => reorderM.mutate(ids);
 
   return {
     active,

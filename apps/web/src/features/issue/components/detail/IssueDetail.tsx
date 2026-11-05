@@ -6,6 +6,7 @@ import IssueDetailContent from './IssueDetailContent';
 import IssueActionsBar from '../actions/IssueActionsBar';
 import { useExitOnEscape } from '@/hooks/useExitOnEscape';
 import { useExitOnClickOutside } from '../../hooks/useExitOnClickOutside';
+import { useIssueTitle } from '../../hooks/useIssueTitle';
 import { Button } from '@/components/ui/button';
 import { useTranslations } from 'next-intl';
 
@@ -21,7 +22,7 @@ export default function IssueDetail({
   issueId: number;
   onClose: () => void;
   // Passed the issue's project-scoped number so the host can open the page URL
-  // (/project/KEY/issue/42); null while the issue is still loading.
+  // (/acme/issue/MKT-42); null while the issue is still loading.
   onExpand: (sequenceNumber: number | null) => void;
 }) {
   const t = useTranslations('issue');
@@ -31,6 +32,7 @@ export default function IssueDetail({
 
   useExitOnEscape(onClose);
   useExitOnClickOutside(panelRef, onClose);
+  useIssueTitle(issueId, 'panel');
 
   return (
     <div

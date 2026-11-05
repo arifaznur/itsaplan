@@ -19,6 +19,23 @@ describe('localeFromAcceptLanguage', () => {
     assert.equal(localeFromAcceptLanguage('id-ID,id;q=0.9,en;q=0.8'), 'id');
   });
 
+  it('matches a Spanish browser header to the supported locale', () => {
+    assert.equal(localeFromAcceptLanguage('es-ES,es;q=0.9,en;q=0.8'), 'es-ES');
+  });
+
+  it('matches a regional Korean browser locale to the supported base language', () => {
+    assert.equal(localeFromAcceptLanguage('ko-KR,ko;q=0.9,en;q=0.8'), 'ko');
+  });
+
+  it('matches a regional Persian browser locale to the supported base language', () => {
+    assert.equal(localeFromAcceptLanguage('fa-IR,fa;q=0.9,en;q=0.8'), 'fa');
+  });
+
+  it('tells Traditional Chinese (Taiwan) apart from Simplified Chinese', () => {
+    assert.equal(localeFromAcceptLanguage('zh-TW,zh;q=0.9,en;q=0.8'), 'zh-TW');
+    assert.equal(localeFromAcceptLanguage('zh,en;q=0.8'), 'zh-CN');
+  });
+
   it('uses the fallback for a preferred wildcard', () => {
     assert.equal(localeFromAcceptLanguage('de-DE,*;q=0.9,zh;q=0.8'), 'en');
   });

@@ -49,18 +49,77 @@ export const appSecret = pgTable('app_secret', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// A team owns projects and holds its own member list. Every account is given one at
-// registration, named after its username, and every project belongs to exactly one
-// team.
-export const team = pgTable('team', {
-  id: serial('id').primaryKey(),
-  name: text('name').notNull(),
-  // Whether the team is reachable through the MCP server at all. Off closes both the
-  // team's own resources (agents, skills, tools, roles, integrations) and every
-  // project it owns, whatever each project's own flag says.
-  mcpEnabled: boolean('mcp_enabled').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+// A workspace owns teams; its members are derived from them. Every person, the instance
+// owner included, gets one of their own at sign-up, and a team is always created in one.
+export const workspace = pgTable(
+  'workspace',
+  {
+    id: serial('id').primaryKey(),
+    name: text('name').notNull(),
+    // The tile colour in the workspace rails, as #rrggbb; null keeps the neutral tile.
+    color: text('color'),
+    // Who creates teams in it: the owner alone, the owner and admins (managers), or
+    // anyone in one of its teams (members).
+    teamCreation: text('team_creation').notNull().default('owner'),
+    // Runs of its internal agents in flight at once; 0 sets no limit of its own.
+    maxConcurrentRuns: integer('max_concurrent_runs').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'workspace_team_creation_check',
+      sql`${t.teamCreation} IN ('owner', 'managers', 'members')`,
+    ),
+    check('workspace_max_concurrent_runs_check', sql`${t.maxConcurrentRuns} >= 0`),
+  ],
+);
+
+// The people who administer a workspace. Nobody else is listed here: membership comes
+// from team_member.
+export const workspaceManager = pgTable(
+  'workspace_manager',
+  {
+    workspaceId: integer('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('admin'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.userId] }),
+    check('workspace_manager_role_check', sql`${t.role} IN ('owner', 'admin')`),
+    uniqueIndex('workspace_manager_owner_uq')
+      .on(t.workspaceId)
+      .where(sql`${t.role} = 'owner'`),
+    index('workspace_manager_user_idx').on(t.userId),
+  ],
+);
+
+// A team owns projects and holds its own member list. Every project belongs to exactly
+// one team.
+export const team = pgTable(
+  'team',
+  {
+    id: serial('id').primaryKey(),
+    workspaceId: integer('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    // The team's segment in web URLs (/acme/MKT). Null until an owner sets one; the
+    // team id stands in for it until then.
+    slug: text('slug').unique(),
+    // Whether the team is reachable through the MCP server at all. Off closes both the
+    // team's own resources (agents, skills, tools, roles, integrations) and every
+    // project it owns, whatever each project's own flag says.
+    mcpEnabled: boolean('mcp_enabled').notNull().default(true),
+    defaultAgentIds: jsonb('default_agent_ids').$type<number[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('team_workspace_idx').on(t.workspaceId)],
+);
 
 // Team membership and the role it carries. The roles are fixed, unlike the
 // per-project ones: 'owner' is the account the team was created for, 'manager' and
@@ -97,39 +156,106 @@ export const teamMember = pgTable(
 // issues. next_sequence is the atomic counter behind each issue's human
 // identifier (e.g. "MKT-42"): incrementing it under a row lock keeps concurrent
 // creates from colliding.
-export const project = pgTable('project', {
-  id: serial('id').primaryKey(),
-  teamId: integer('team_id')
-    .notNull()
-    .references(() => team.id, { onDelete: 'cascade' }),
-  key: text('key').notNull().unique(),
-  name: text('name').notNull(),
-  description: text('description').notNull().default(''),
-  nextSequence: integer('next_sequence').notNull().default(1),
-  // Whether this project is in the team's MCP reach. Managed from the team's MCP
-  // settings, not from the project, and only counts while team.mcp_enabled is on.
-  // The starting value is the instance-wide project default set in god mode.
-  mcpEnabled: boolean('mcp_enabled').notNull().default(false),
-  // Optional sections of the app, toggled per project in Settings -> Features. All
-  // on by default. Turning one off only hides its UI; the rows it owns stay and
-  // come back with it.
-  initiativesEnabled: boolean('initiatives_enabled').notNull().default(true),
-  dashboardsEnabled: boolean('dashboards_enabled').notNull().default(true),
-  documentsEnabled: boolean('documents_enabled').notNull().default(true),
-  notesEnabled: boolean('notes_enabled').notNull().default(true),
-  cyclesEnabled: boolean('cycles_enabled').notNull().default(true),
-  subtasksEnabled: boolean('subtasks_enabled').notNull().default(true),
-  checklistsEnabled: boolean('checklists_enabled').notNull().default(true),
-  issueStatsEnabled: boolean('issue_stats_enabled').notNull().default(true),
-  // Which kinds of estimate the issues of this project carry, set in Settings ->
-  // Configuration. Both off by default; turning one off hides its UI and keeps the
-  // values, which show again when it is turned back on.
-  pointsEstimateEnabled: boolean('points_estimate_enabled').notNull().default(false),
-  timeEstimateEnabled: boolean('time_estimate_enabled').notNull().default(false),
-  // Whether members log the time they spend on the issues of this project, set in
-  // the same place. Independent of the time estimate: a team can log time without
-  // estimating first. Turning it off hides the entries and keeps them.
-  timeLoggingEnabled: boolean('time_logging_enabled').notNull().default(false),
+export const project = pgTable(
+  'project',
+  {
+    id: serial('id').primaryKey(),
+    teamId: integer('team_id')
+      .notNull()
+      .references(() => team.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    nextSequence: integer('next_sequence').notNull().default(1),
+    // Whether this project is in the team's MCP reach. Managed from the team's MCP
+    // settings, not from the project, and only counts while team.mcp_enabled is on.
+    // The starting value is the instance-wide project default set in god mode.
+    mcpEnabled: boolean('mcp_enabled').notNull().default(false),
+    // Optional sections of the app, toggled per project in Settings -> Features. All
+    // on by default. Turning one off only hides its UI; the rows it owns stay and
+    // come back with it.
+    initiativesEnabled: boolean('initiatives_enabled').notNull().default(true),
+    dashboardsEnabled: boolean('dashboards_enabled').notNull().default(true),
+    documentsEnabled: boolean('documents_enabled').notNull().default(true),
+    notesEnabled: boolean('notes_enabled').notNull().default(true),
+    cyclesEnabled: boolean('cycles_enabled').notNull().default(true),
+    subtasksEnabled: boolean('subtasks_enabled').notNull().default(true),
+    checklistsEnabled: boolean('checklists_enabled').notNull().default(true),
+    issueStatsEnabled: boolean('issue_stats_enabled').notNull().default(true),
+    // Which kinds of estimate the issues of this project carry, set in Settings ->
+    // Configuration. Both off by default; turning one off hides its UI and keeps the
+    // values, which show again when it is turned back on.
+    pointsEstimateEnabled: boolean('points_estimate_enabled').notNull().default(false),
+    timeEstimateEnabled: boolean('time_estimate_enabled').notNull().default(false),
+    // Whether members log the time they spend on the issues of this project, set in
+    // the same place. Independent of the time estimate: a team can log time without
+    // estimating first. Turning it off hides the entries and keeps them.
+    timeLoggingEnabled: boolean('time_logging_enabled').notNull().default(false),
+    // When set, the project is archived: read-only, left out of the members' project
+    // lists, and its agent schedules do not run. Its rows are kept and it can be restored.
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique('project_team_key_uq').on(t.teamId, t.key)],
+);
+
+// A project template of a workspace: a snapshot of a project's configuration, without
+// its issues, that new projects of its teams are created from. The snapshot's shape is
+// ProjectSnapshot in the api (modules/projects/copy.ts). With all_teams off, only the
+// teams in project_template_team see it. The flag is explicit so that a deleted team
+// does not open a limited template to the whole workspace.
+export const projectTemplate = pgTable(
+  'project_template',
+  {
+    id: serial('id').primaryKey(),
+    workspaceId: integer('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    snapshot: jsonb('snapshot').notNull(),
+    allTeams: boolean('all_teams').notNull().default(true),
+    // The template's page in the gallery at itsaplan.dev, NULL while it is not published.
+    publicationId: text('publication_id'),
+    publicationUrl: text('publication_url'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('project_template_workspace_idx').on(t.workspaceId)],
+);
+
+// The teams a project template is limited to when its all_teams is off.
+export const projectTemplateTeam = pgTable(
+  'project_template_team',
+  {
+    templateId: integer('template_id')
+      .notNull()
+      .references(() => projectTemplate.id, { onDelete: 'cascade' }),
+    teamId: integer('team_id')
+      .notNull()
+      .references(() => team.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.templateId, t.teamId] }),
+    index('project_template_team_team_idx').on(t.teamId),
+  ],
+);
+
+// The gallery publisher a workspace publishes its project templates under: the email it
+// confirmed with a code, and the key the gallery issued for it. The key is read back for
+// every publish, so it is kept encrypted rather than hashed. The author is the name the
+// gallery shows on every template of the address; the workspace keeps a copy to show in
+// its dialogs and refuses a publish until it is set.
+export const templatePublisher = pgTable('template_publisher', {
+  workspaceId: integer('workspace_id')
+    .primaryKey()
+    .references(() => workspace.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  keyCiphertext: text('key_ciphertext').notNull(),
+  keyIv: text('key_iv').notNull(),
+  keyAuthTag: text('key_auth_tag').notNull(),
+  authorName: text('author_name').notNull().default(''),
+  authorUrl: text('author_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -218,22 +344,21 @@ export const userPreference = pgTable(
   ],
 );
 
-// Custom roles per team, shared by every project the team owns. A role carries a
-// permission matrix: for each resource (work_items, dashboards, ...) the
-// create/edit/read/delete flags. The matrix is a jsonb blob owned and enforced by
-// the API (see apps/api/src/shared/permissions.ts). Exactly one role per team is
-// the default ("Member"): it is assigned to members that join through an invite
-// and is the fallback for a member row with no explicit role. Owners bypass roles
-// entirely (they always have full access), so their project_member.role_id stays
-// NULL. A member of a project may only be put on a role of that project's team;
-// the API checks it, no foreign key can.
+// The roles a project member is put on. A role carries a permission matrix: for each
+// resource (work_items, dashboards, ...) the create/edit/read/delete flags. The matrix
+// is a jsonb blob owned and enforced by the API (see apps/api/src/shared/permissions.ts).
+// A row with a team_id is a custom role of that team, shared by every project the team
+// owns. A row with a NULL team_id is a system role: every team assigns it, and only the
+// instance owner edits it, in god mode. The one system role marked default ("Member")
+// is assigned to members that join without a chosen role. Owners bypass roles entirely
+// (they always have full access), so their project_member.role_id stays NULL. A member
+// of a project may only be put on a role of that project's team or a system role; the
+// API checks it, no foreign key can.
 export const teamRole = pgTable(
   'team_role',
   {
     id: serial('id').primaryKey(),
-    teamId: integer('team_id')
-      .notNull()
-      .references(() => team.id, { onDelete: 'cascade' }),
+    teamId: integer('team_id').references(() => team.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     isDefault: boolean('is_default').notNull().default(false),
     permissions: jsonb('permissions').notNull().default({}),
@@ -241,10 +366,13 @@ export const teamRole = pgTable(
   },
   (t) => [
     unique().on(t.teamId, t.name),
-    // At most one default role per team.
-    uniqueIndex('team_role_default_uq')
-      .on(t.teamId)
-      .where(sql`${t.isDefault}`),
+    check('team_role_default_system_check', sql`${t.teamId} IS NULL OR NOT ${t.isDefault}`),
+    uniqueIndex('team_role_system_name_uq')
+      .on(t.name)
+      .where(sql`${t.teamId} IS NULL`),
+    uniqueIndex('team_role_system_default_uq')
+      .on(t.isDefault)
+      .where(sql`${t.teamId} IS NULL AND ${t.isDefault}`),
     index('team_role_team_idx').on(t.teamId),
   ],
 );
@@ -254,9 +382,10 @@ export const teamRole = pgTable(
 // project-scoped entity only through a row here. The creator is inserted as
 // "owner"; a project can have several owners. Owners always have full access and
 // manage the member list. A "member" row carries role_id pointing at a
-// team_role of the project's team, whose permission matrix decides what that member
-// may do; a NULL role_id falls back to the team's default role. Access checks resolve
-// the owning project of any entity and look for the current user here.
+// team_role of the project's team or a system role, whose permission matrix decides
+// what that member may do; a NULL role_id falls back to the built-in member matrix
+// (defaultMemberPermissions). Access checks resolve the owning project of any entity
+// and look for the current user here.
 export const projectMember = pgTable(
   'project_member',
   {
@@ -279,6 +408,8 @@ export const projectMember = pgTable(
     // it only ever updates or removes its own rows, so a sync never undoes a
     // membership someone set up by hand.
     source: text('source').notNull().default('invite'),
+    isFavorite: boolean('is_favorite').notNull().default(false),
+    isHidden: boolean('is_hidden').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -312,8 +443,8 @@ export const teamInvite = pgTable(
     // plain member; a rank above that is granted by an invite into the team itself.
     teamRole: text('team_role').notNull().default('member'),
     projectRole: text('project_role'),
-    // The team role the invitee joins the project on when project_role is "member".
-    // NULL falls back to the team's default role. Project owners bypass roles, so an
+    // The role the invitee joins the project on when project_role is "member".
+    // NULL falls back to the default system role. Project owners bypass roles, so an
     // owner invite keeps this NULL.
     roleId: integer('role_id').references(() => teamRole.id, {
       onDelete: 'set null',
@@ -466,12 +597,19 @@ export const aiAgent = pgTable(
     // that act on the API with the agent's own token are implicit and not listed.
     tools: jsonb('tools').notNull().default([]),
     temperature: doublePrecision('temperature'),
+    // NULL leaves the reasoning effort to the provider's default.
+    reasoningEffort: text('reasoning_effort'),
     maxSteps: integer('max_steps'),
+    // NULL gives the run the instance's maximum run time.
+    runTimeoutSec: integer('run_timeout_sec'),
     // Internal-agent run triggers. A mention in a comment enqueues a run when
     // trigger_on_mention is set; being set as an issue's delegate enqueues one when
     // trigger_on_assign is set.
     triggerOnMention: boolean('trigger_on_mention').notNull().default(true),
     triggerOnAssign: boolean('trigger_on_assign').notNull().default(false),
+    // Gates the test chat and the external-agent chat only; the triggers above and
+    // schedules still run an agent with chat off.
+    chatEnabled: boolean('chat_enabled').notNull().default(true),
     // How long a delegation run waits before it becomes claimable, which leaves time
     // to keep editing the issue after delegating it. Applies to delegation only: a
     // mention is a question already asked, and its author waits for the reply.
@@ -496,6 +634,16 @@ export const aiAgent = pgTable(
     // Last time a runner claimed work or sent a heartbeat for this agent, which is
     // what the UI shows as its presence. NULL for an agent no runner ever polled.
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    // Where an external agent receives its work instead of from a runner: each of its
+    // runs and chat answers is POSTed here, and the endpoint reports back through the
+    // routes a runner uses. NULL for an agent a runner drains, and for an internal one.
+    invocationUrl: text('invocation_url'),
+    // The key those requests are signed with, encrypted at rest like the API key above
+    // because every request reads it back. It outlives a cleared URL, so pointing the
+    // agent at a URL again needs no change on the receiving side.
+    invocationSecretCiphertext: text('invocation_secret_ciphertext'),
+    invocationSecretIv: text('invocation_secret_iv'),
+    invocationSecretAuthTag: text('invocation_secret_auth_tag'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -503,6 +651,10 @@ export const aiAgent = pgTable(
     unique().on(t.userId),
     check('ai_agent_kind_check', sql`${t.kind} IN ('external', 'internal')`),
     check('ai_agent_runner_scope_check', sql`${t.runnerScope} IN ('owner', 'team')`),
+    check(
+      'ai_agent_reasoning_effort_check',
+      sql`${t.reasoningEffort} IN ('low', 'medium', 'high')`,
+    ),
     check(
       'ai_agent_delegation_delay_check',
       sql`${t.delegationDelaySec} >= 0 AND ${t.delegationDelaySec} <= 86400`,
@@ -527,28 +679,76 @@ export const agentSchedule = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    // Empty on a 'status' schedule that sends no task of its own.
     prompt: text('prompt').notNull(),
-    cron: text('cron').notNull(),
+    // 'cron' runs on `cron` and carries `next_run_at`; 'status' runs on an issue each
+    // time one enters `column_id`, `delay_sec` after it does. Any other type is one an
+    // extension of the api adds (modules/agents/schedules/extension.ts), which queues
+    // its runs itself.
+    type: text('type').notNull().default('cron'),
+    cron: text('cron'),
     timezone: text('timezone').notNull(),
     status: text('status').notNull().default('active'),
-    nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull(),
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+    columnId: integer('column_id').references(() => projectColumn.id, { onDelete: 'cascade' }),
+    delaySec: integer('delay_sec').notNull().default(0),
+    // Settings an extension of the api keeps on the schedule. The core stores and
+    // copies them and reads none.
+    options: jsonb('options').$type<Record<string, unknown>>().notNull().default({}),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     check('agent_schedule_status_check', sql`${t.status} IN ('active', 'paused')`),
+    check(
+      'agent_schedule_type_check',
+      sql`(${t.type} = 'cron' AND ${t.cron} IS NOT NULL AND ${t.nextRunAt} IS NOT NULL AND ${t.columnId} IS NULL)
+        OR (${t.type} = 'status' AND ${t.columnId} IS NOT NULL AND ${t.cron} IS NULL AND ${t.nextRunAt} IS NULL)
+        OR (${t.type} NOT IN ('cron', 'status') AND ${t.cron} IS NULL AND ${t.nextRunAt} IS NULL AND ${t.columnId} IS NULL)`,
+    ),
+    check('agent_schedule_delay_check', sql`${t.delaySec} >= 0 AND ${t.delaySec} <= 86400`),
     // A schedule works in one project, and one agent works in several projects of
     // its team, so the same name is free again in each of them.
     unique().on(t.projectId, t.agentId, t.name),
     index('agent_schedule_due_idx').on(t.status, t.nextRunAt),
     index('agent_schedule_agent_idx').on(t.agentId),
     index('agent_schedule_project_idx').on(t.projectId),
+    index('agent_schedule_column_idx').on(t.columnId),
   ],
 );
 
-// Queued autonomous runs of an internal agent. Mentions and delegations carry an
-// issue; scheduled and manual runs do not. The worker claims due rows with a lease,
+// A price a workspace set for one model, in USD per million tokens. The agent dashboard
+// reads it before the built-in price table (apps/api/src/modules/agents/core/runtime/
+// model-pricing.ts), so a model the table lacks, or one bought at another rate, is
+// costed as the workspace pays for it. Provider and model are kept lowercased, as the
+// table compares them. A cache rate left null bills those tokens at the input rate.
+export const modelPrice = pgTable(
+  'model_price',
+  {
+    id: serial('id').primaryKey(),
+    workspaceId: integer('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    input: doublePrecision('input').notNull(),
+    output: doublePrecision('output').notNull(),
+    cacheRead: doublePrecision('cache_read'),
+    cacheWrite: doublePrecision('cache_write'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'model_price_rates_check',
+      sql`${t.input} >= 0 AND ${t.output} >= 0 AND coalesce(${t.cacheRead}, 0) >= 0 AND coalesce(${t.cacheWrite}, 0) >= 0`,
+    ),
+    unique().on(t.workspaceId, t.provider, t.model),
+  ],
+);
+
+// Queued autonomous runs of an internal agent. A run triggered on an issue carries it;
+// a cron schedule's run and a manual one do not. The worker claims due rows with a lease,
 // runs the agent, and records the result for history and retries.
 export const agentRun = pgTable(
   'agent_run',
@@ -566,6 +766,7 @@ export const agentRun = pgTable(
       .references(() => project.id, { onDelete: 'cascade' }),
     issueId: integer('issue_id').references(() => issue.id, { onDelete: 'cascade' }),
     scheduleId: integer('schedule_id').references(() => agentSchedule.id, { onDelete: 'cascade' }),
+    // 'event' is a run an extension queued on an issue for a schedule of its own type.
     trigger: text('trigger').notNull().default('delegation'),
     scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
     // The comment that mentioned the agent, kept for traceability. The prompt is
@@ -573,6 +774,15 @@ export const agentRun = pgTable(
     sourceActivityId: integer('source_activity_id').references(() => issueActivity.id, {
       onDelete: 'set null',
     }),
+    // A mention in a document comment: the document and the comment. Such a run has no
+    // issue.
+    documentId: integer('document_id').references(() => projectDocument.id, {
+      onDelete: 'cascade',
+    }),
+    sourceDocumentCommentId: uuid('source_document_comment_id').references(
+      () => documentComment.id,
+      { onDelete: 'set null' },
+    ),
     // The mention comment body at enqueue time, framed into the agent's prompt.
     prompt: text('prompt').notNull(),
     // pending -> success | failed | canceled. Like webhook_delivery, a claim keeps the row
@@ -589,6 +799,10 @@ export const agentRun = pgTable(
     inputTokens: integer('input_tokens'),
     outputTokens: integer('output_tokens'),
     startedAt: timestamp('started_at', { withTimezone: true }),
+    executionStartedAt: timestamp('execution_started_at', { withTimezone: true }),
+    // The api's current claim of an internal agent's run; null while the run waits,
+    // deferred or in retry backoff. The instance's run limit counts the claimed runs.
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -599,13 +813,37 @@ export const agentRun = pgTable(
     ),
     check(
       'agent_run_trigger_check',
-      sql`${t.trigger} IN ('mention', 'delegation', 'field', 'schedule', 'manual')`,
+      sql`${t.trigger} IN ('mention', 'delegation', 'field', 'schedule', 'manual', 'status', 'event')`,
     ),
     uniqueIndex('agent_run_schedule_fire_uq').on(t.scheduleId, t.scheduledFor),
     index('agent_run_due_idx').on(t.status, t.nextAttemptAt),
     index('agent_run_schedule_idx').on(t.scheduleId),
     index('agent_run_project_idx').on(t.projectId),
+    // Back an issue's run list and the cascades of an issue or comment delete.
+    index('agent_run_issue_idx')
+      .on(t.issueId, t.id.desc())
+      .where(sql`${t.issueId} IS NOT NULL`),
+    index('agent_run_source_activity_idx')
+      .on(t.sourceActivityId)
+      .where(sql`${t.sourceActivityId} IS NOT NULL`),
   ],
+);
+
+// A bounded execution transcript for one external runner attempt.
+export const agentRunTrace = pgTable(
+  'agent_run_trace',
+  {
+    runId: integer('run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    attempt: integer('attempt').notNull(),
+    sessionId: text('session_id'),
+    events: jsonb('events').notNull().default([]),
+    nextOffset: integer('next_offset').notNull().default(0),
+    truncated: boolean('truncated').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.attempt] })],
 );
 
 // A conversation between one member and one external agent. The internal agents'
@@ -771,9 +1009,9 @@ export const gitProviderConnection = pgTable(
   'git_provider_connection',
   {
     id: serial('id').primaryKey(),
-    projectId: integer('project_id')
+    teamId: integer('team_id')
       .notNull()
-      .references(() => project.id, { onDelete: 'cascade' }),
+      .references(() => team.id, { onDelete: 'cascade' }),
     provider: text('provider').notNull(),
     baseUrl: text('base_url').notNull(),
     accountLogin: text('account_login').notNull(),
@@ -783,21 +1021,16 @@ export const gitProviderConnection = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    unique('git_provider_connection_project_provider_url_account_unique').on(
-      t.projectId,
-      t.provider,
-      t.baseUrl,
-      t.accountLogin,
-    ),
-    index('git_provider_connection_project_idx').on(t.projectId),
-  ],
+  (t) => [index('git_provider_connection_team_idx').on(t.teamId)],
 );
 
 export const gitManagedRepository = pgTable(
   'git_managed_repository',
   {
     id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => project.id, { onDelete: 'cascade' }),
     connectionId: integer('connection_id')
       .notNull()
       .references(() => gitProviderConnection.id, { onDelete: 'cascade' }),
@@ -811,8 +1044,12 @@ export const gitManagedRepository = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    unique('git_managed_repository_connection_external_unique').on(t.connectionId, t.externalId),
-    index('git_managed_repository_connection_idx').on(t.connectionId, t.fullName),
+    unique('git_managed_repository_project_connection_external_unique').on(
+      t.projectId,
+      t.connectionId,
+      t.externalId,
+    ),
+    index('git_managed_repository_project_connection_idx').on(t.projectId, t.connectionId),
   ],
 );
 
@@ -1001,8 +1238,9 @@ export const agentSkillLink = pgTable(
 // catalog (tool_key) bound to one integration_credential. The tool's integration owns
 // the secret, so the tool holds no secret of its own — it references the credential
 // the runtime decrypts at call time. Different tools of the same integration may be
-// bound to different credentials (e.g. two Jina keys). Enabled on an agent via
-// agent_tool_link.
+// bound to different credentials (e.g. two Jina keys). A tool of an integration with
+// no credential (PDF) has a null credential_id and is configured once per team.
+// Enabled on an agent via agent_tool_link.
 export const agentTool = pgTable(
   'agent_tool',
   {
@@ -1011,13 +1249,16 @@ export const agentTool = pgTable(
       .notNull()
       .references(() => team.id, { onDelete: 'cascade' }),
     toolKey: text('tool_key').notNull(),
-    credentialId: integer('credential_id')
-      .notNull()
-      .references(() => integrationCredential.id, { onDelete: 'cascade' }),
+    credentialId: integer('credential_id').references(() => integrationCredential.id, {
+      onDelete: 'cascade',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique().on(t.teamId, t.toolKey, t.credentialId),
+    uniqueIndex('agent_tool_team_tool_keyless_uq')
+      .on(t.teamId, t.toolKey)
+      .where(sql`${t.credentialId} IS NULL`),
     index('agent_tool_team_idx').on(t.teamId),
     index('agent_tool_credential_idx').on(t.credentialId),
   ],
@@ -1317,6 +1558,10 @@ export const issue = pgTable(
     shareToken: uuid('share_token').unique(),
     // How much the share link exposes, the same choice a shared view carries.
     shareExtended: boolean('share_extended').notNull().default(false),
+    // When the share link stops working. NULL means it never expires. Past this
+    // moment the link reads as revoked everywhere, and the api's share-expiry sweep
+    // clears the token.
+    shareExpiresAt: timestamp('share_expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1342,6 +1587,31 @@ export const issue = pgTable(
     index('issue_cycle_idx')
       .on(t.cycleId)
       .where(sql`${t.cycleId} IS NOT NULL`),
+    // Backs the progress counts of the initiatives list and of one initiative, and the
+    // ON DELETE SET NULL an initiative delete runs.
+    index('issue_initiative_idx')
+      .on(t.initiativeId)
+      .where(sql`${t.initiativeId} IS NOT NULL`),
+  ],
+);
+
+// The number an issue held in a project it was moved out of, so a link to the old
+// identifier still resolves. project.next_sequence never hands that number out again,
+// so it cannot collide with an issue of that project.
+export const issueKeyAlias = pgTable(
+  'issue_key_alias',
+  {
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => project.id, { onDelete: 'cascade' }),
+    sequenceNumber: integer('sequence_number').notNull(),
+    issueId: integer('issue_id')
+      .notNull()
+      .references(() => issue.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.sequenceNumber] }),
+    index('issue_key_alias_issue_idx').on(t.issueId),
   ],
 );
 
@@ -1806,14 +2076,25 @@ export const projectView = pgTable(
     // subtasks and links; true adds the assignees, labels, custom fields and
     // activity the members see.
     shareExtended: boolean('share_extended').notNull().default(false),
+    // When the share link stops working; NULL means never. See issue.shareExpiresAt.
+    shareExpiresAt: timestamp('share_expires_at', { withTimezone: true }),
+    // A private view is seen only by its owner, not even by a project owner. The owner
+    // is set only on private views, so deleting an account takes its private views and
+    // never a project's.
+    isPrivate: boolean('is_private').notNull().default(false),
+    ownerUserId: text('owner_user_id').references(() => user.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('project_view_project_idx').on(t.projectId, t.position)],
+  (t) => [
+    index('project_view_project_idx').on(t.projectId, t.position),
+    index('project_view_owner_idx').on(t.ownerUserId),
+    check('project_view_private_owner_check', sql`${t.isPrivate} = (${t.ownerUserId} is not null)`),
+  ],
 );
 
-// The saved views a user marked as favorite. Favorites are personal: they pin the
-// view's tab to the front of the tab row and list it under Work items in the
-// sidebar, for that user only.
+// The saved views a user marked as favorite. Favorites are personal: they mark the
+// view's tab with a star and list it under Work items in the sidebar, for that user
+// only.
 export const projectViewFavorite = pgTable(
   'project_view_favorite',
   {
@@ -1823,6 +2104,24 @@ export const projectViewFavorite = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.viewId, t.userId] })],
+);
+
+// Each user's own tab row: where they placed a view and whether they hid it. A view
+// without a position follows the last view of its kind in the row, so a view added to the
+// project shows up in rows already arranged. Only a project's view can be hidden.
+export const projectViewPreference = pgTable(
+  'project_view_preference',
+  {
+    viewId: integer('view_id')
+      .notNull()
+      .references(() => projectView.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    position: integer('position'),
+    isHidden: boolean('is_hidden').notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.viewId, t.userId] })],
 );
@@ -2140,12 +2439,100 @@ export const webhookDelivery = pgTable(
   ],
 );
 
+// Background job that imports issues from an external tracker into a project. The
+// worker claims due rows the same way as webhook_delivery, and cursor is the
+// job's own per-phase resumability checkpoint, not the source API's pagination
+// cursor. The credential columns are cleared once the job reaches a terminal
+// status. `source` names a source adapter of the worker (apps/worker/src/import-sources.ts);
+// the database takes any name, so a build can add sources of its own.
+
+export const importJob = pgTable(
+  'import_job',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => project.id, { onDelete: 'cascade' }),
+    createdByUserId: text('created_by_user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    phase: text('phase').notNull().default('discover'),
+    status: text('status').notNull().default('pending'),
+    config: jsonb('config').notNull().default({}),
+    cursor: jsonb('cursor').notNull().default({}),
+    credentialCiphertext: text('credential_ciphertext'),
+    credentialIv: text('credential_iv'),
+    credentialAuthTag: text('credential_auth_tag'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'import_job_phase_check',
+      sql`${t.phase} IN ('discover', 'create', 'link', 'rewrite', 'attachments', 'done')`,
+    ),
+    check(
+      'import_job_status_check',
+      sql`${t.status} IN ('pending', 'running', 'paused', 'completed', 'failed')`,
+    ),
+    index('import_job_project_idx').on(t.projectId),
+    // Backs the worker's claim query: due pending rows ordered by next_attempt_at.
+    index('import_job_due_idx')
+      .on(t.nextAttemptAt)
+      .where(sql`${t.status} = 'pending'`),
+  ],
+);
+
+// Source-id-to-local-id mapping for one import job. The unique index on
+// (import_job_id, source_entity_type, source_id) makes the upsert idempotent, so
+// a re-run of a phase finds the existing row instead of creating another. No
+// foreign key on local_id: it spans every table an import can create, not one.
+export const importRecord = pgTable(
+  'import_record',
+  {
+    id: serial('id').primaryKey(),
+    importJobId: integer('import_job_id')
+      .notNull()
+      .references(() => importJob.id, { onDelete: 'cascade' }),
+    sourceEntityType: text('source_entity_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    // The source's own human-readable number for the entity (Plane's work item
+    // sequence_id, as a string) — only set for 'issue' rows, at Create time. Lets
+    // the Rewrite phase resolve a cross-reference like "ROOMS-524" back to this
+    // job's mapping without re-fetching every issue a second time to learn it.
+    sourceDisplayId: text('source_display_id'),
+    localEntityType: text('local_entity_type'),
+    localId: integer('local_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'import_record_source_entity_type_check',
+      sql`${t.sourceEntityType} IN ('issue', 'comment', 'label', 'state', 'cycle', 'attachment', 'checklist', 'custom_field')`,
+    ),
+    check(
+      'import_record_local_entity_type_check',
+      sql`${t.localEntityType} IS NULL OR ${t.localEntityType} IN ('issue', 'comment', 'label', 'state', 'cycle', 'attachment', 'checklist', 'custom_field')`,
+    ),
+    uniqueIndex('import_record_job_source_uq').on(t.importJobId, t.sourceEntityType, t.sourceId),
+    index('import_record_job_local_idx').on(t.importJobId, t.localEntityType, t.localId),
+    // Backs the Rewrite phase's cross-reference lookup (job, entity type, display id).
+    index('import_record_job_display_idx').on(t.importJobId, t.sourceEntityType, t.sourceDisplayId),
+  ],
+);
+
 // Per-user inbox notifications. One row per (recipient, event): a user is notified
 // about an issue they are involved in (assigned to them, mentioned, or watching it
-// when it is commented on or moved). The actor's own actions never notify the actor.
-// project_id is denormalized from the issue so the inbox can filter and scope by
-// project. source_activity_id points at the issue_activity row that produced the
-// notification (set null if that entry is later removed). type selects the kind.
+// when it is commented on or moved), or about a document that mentions them in its
+// text or in a comment. A row points at either an issue or a document. The actor's own
+// actions never notify the actor. project_id is denormalized from the issue or the
+// document so the inbox can filter and scope by project. source_activity_id points at
+// the issue_activity row that produced the notification, document_comment_id at the
+// document comment (each set null if that entry is later removed). type selects the kind.
 // read_at NULL means unread; snoozed_until, when set and still in the future, hides
 // the row from the default inbox until then.
 export const notification = pgTable(
@@ -2158,10 +2545,14 @@ export const notification = pgTable(
     projectId: integer('project_id')
       .notNull()
       .references(() => project.id, { onDelete: 'cascade' }),
-    issueId: integer('issue_id')
-      .notNull()
-      .references(() => issue.id, { onDelete: 'cascade' }),
+    issueId: integer('issue_id').references(() => issue.id, { onDelete: 'cascade' }),
     sourceActivityId: integer('source_activity_id').references(() => issueActivity.id, {
+      onDelete: 'set null',
+    }),
+    documentId: integer('document_id').references(() => projectDocument.id, {
+      onDelete: 'cascade',
+    }),
+    documentCommentId: uuid('document_comment_id').references(() => documentComment.id, {
       onDelete: 'set null',
     }),
     type: text('type').notNull(),
@@ -2178,12 +2569,20 @@ export const notification = pgTable(
       'notification_type_check',
       sql`${t.type} IN ('assigned', 'mentioned', 'commented', 'state_changed')`,
     ),
+    check('notification_target_check', sql`(${t.issueId} IS NULL) <> (${t.documentId} IS NULL)`),
     // Backs the inbox list: a user's notifications newest first.
     index('notification_user_idx').on(t.userId, t.createdAt.desc(), t.id.desc()),
     // Backs the unread count and the unread-only inbox view.
     index('notification_user_unread_idx')
       .on(t.userId, t.id.desc())
       .where(sql`${t.readAt} IS NULL`),
+    // Back the cascades of an issue or comment delete.
+    index('notification_issue_idx')
+      .on(t.issueId)
+      .where(sql`${t.issueId} IS NOT NULL`),
+    index('notification_source_activity_idx')
+      .on(t.sourceActivityId)
+      .where(sql`${t.sourceActivityId} IS NOT NULL`),
   ],
 );
 
@@ -2207,4 +2606,49 @@ export const revision = pgTable(
   },
   // Backs both the project cleanup and the membership join the read does.
   (t) => [index('revision_project_idx').on(t.projectId)],
+);
+
+export const documentCollaboration = pgTable('document_collaboration', {
+  documentId: integer('document_id')
+    .primaryKey()
+    .references(() => projectDocument.id, { onDelete: 'cascade' }),
+  epoch: uuid('epoch').notNull().defaultRandom(),
+  version: integer('version').notNull().default(0),
+  contentJson: jsonb('content_json').$type<Record<string, unknown>>().notNull(),
+});
+
+export const documentStep = pgTable(
+  'document_step',
+  {
+    documentId: integer('document_id')
+      .notNull()
+      .references(() => projectDocument.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    clientId: text('client_id').notNull(),
+    step: jsonb('step').$type<Record<string, unknown>>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.documentId, t.version] })],
+);
+
+export const documentComment = pgTable(
+  'document_comment',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: integer('document_id')
+      .notNull()
+      .references(() => projectDocument.id, { onDelete: 'cascade' }),
+    parentId: uuid('parent_id').references((): AnyPgColumn => documentComment.id, {
+      onDelete: 'cascade',
+    }),
+    authorId: text('author_id').references(() => user.id, { onDelete: 'set null' }),
+    body: text('body').notNull(),
+    quote: text('quote').notNull().default(''),
+    from: integer('selection_from'),
+    to: integer('selection_to'),
+    orphaned: boolean('orphaned').notNull().default(false),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('document_comment_document_idx').on(t.documentId, t.createdAt)],
 );

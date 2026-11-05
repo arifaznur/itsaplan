@@ -1,6 +1,6 @@
 # ── Next.js (standalone) — built from the monorepo root ──
 # build context in docker-compose = repository root (.)
-FROM oven/bun:1.4.0-alpine AS base
+FROM oven/bun:1.4.4-alpine AS base
 WORKDIR /app
 
 # 1) Install dependencies from manifests (cacheable layer). All workspace
@@ -18,6 +18,7 @@ COPY packages/agent-tools/package.json ./packages/agent-tools/
 COPY packages/crypto/package.json ./packages/crypto/
 COPY packages/mailer/package.json ./packages/mailer/
 COPY packages/net/package.json ./packages/net/
+COPY packages/storage/package.json ./packages/storage/
 COPY packages/runner/package.json ./packages/runner/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 RUN bun install --frozen-lockfile
@@ -40,6 +41,10 @@ RUN cd apps/web && bun run build
 # with "Failed to load external module isomorphic-dompurify-<hash>". Alpine keeps the
 # musl build of the traced native modules (sharp) valid.
 FROM node:24-alpine AS release
+# The server runs on node alone. npm, npx, corepack and yarn ship with the base image,
+# are never used, and bring their own vulnerable dependencies (npm's undici and tar).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

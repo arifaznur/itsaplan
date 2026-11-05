@@ -44,7 +44,7 @@ export default function CommandLayer({
   onNewIssue: () => void;
   onSelectAll: () => void;
   onNewInitiative: () => void;
-  onNewProject: () => void;
+  onNewProject: (() => void) | null;
   onSelectProject: (key: string) => void;
   onOpenIssue: (sequenceNumber: number) => void;
   onIssueDeleted: () => void;
@@ -83,7 +83,7 @@ export default function CommandLayer({
         onOpenChange={onOpenChange}
         sections={sections}
         currentProjectKey={currentProjectKey}
-        hasProject={hasProject}
+        currentProjectId={project?.project.id ?? null}
         onOpenIssue={onOpenIssue}
       />
       {issue.dialogs}

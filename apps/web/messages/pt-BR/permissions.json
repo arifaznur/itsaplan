@@ -6,7 +6,7 @@
     "initiatives": "Iniciativas",
     "cycles": "Ciclos",
     "dashboards": "Dashboards",
-    "documents": "Docs",
+    "documents": "Documentos",
     "views": "Visões de itens de trabalho",
     "members_invite": "Convites",
     "members_manage": "Membros",
@@ -14,15 +14,19 @@
     "issue_types": "Tipos de issue",
     "labels": "Etiquetas",
     "ai_agents": "Agentes de IA",
+    "agent_schedules": "Agendamentos de agentes",
     "integrations": "Integrações",
     "agent_skills": "Habilidades de agente",
     "agent_tools": "Ferramentas de agente",
+    "agent_usage": "Consumo dos agentes",
     "custom_fields": "Campos personalizados",
     "issue_templates": "Modelos de issue",
     "workflow_config": "Configuração de fluxo de trabalho",
     "actions": "Ações",
     "webhooks": "Webhooks",
+    "repositories": "Repositórios",
     "note_boards": "Quadros de notas",
+    "import_export": "Importar/Exportar",
     "danger_zone": "Zona de perigo"
   },
   "actions": {
@@ -34,7 +38,7 @@
   "groups": {
     "workItems": "Itens de trabalho",
     "dashboards": "Dashboards",
-    "documents": "Docs",
+    "documents": "Documentos",
     "notes": "Notas",
     "ai": "IA",
     "configuration": "Configuração",
@@ -46,5 +50,16 @@
   "allowed": "permitido",
   "notAllowed": "não permitido",
   "accessHeading": "Acesso a este projeto",
-  "joined": "entrou em {date}"
+  "joined": "entrou em {date}",
+  "editor": {
+    "titleEdit": "Editar função",
+    "titleNew": "Nova função",
+    "namePlaceholder": "ex. Colaborador",
+    "toggleActionAll": "Alternar {action} para todos os recursos",
+    "toggleGroupAll": "Alternar todas as permissões de {group}",
+    "toggleActionGroup": "Alternar {action} para {group}",
+    "cellAria": "{resource}: {action}",
+    "saveRole": "Salvar função",
+    "createRole": "Criar função"
+  }
 }

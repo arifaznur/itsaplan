@@ -1,5 +1,6 @@
 import type { Permission } from '#shared/guards';
 import type { McpApp } from './types';
+import { outputSchema, type McpOutputSchema } from './result';
 
 // Turns the assembled app's routes into MCP tool descriptors. A route opts in by
 // carrying an `x-mcp` extension in its OpenAPI `detail` (see mcpTool). The route's
@@ -8,7 +9,8 @@ import type { McpApp } from './types';
 // so validation, permissions, and the error model are reused, never duplicated.
 
 // The JSON Schema an MCP client receives for a tool's arguments. TypeBox emits
-// JSON Schema, so the route schemas are merged into this shape as-is.
+// JSON Schema, so the route schemas are merged into this shape as they are, except
+// for the bare `nullable` (see withoutBareNullable).
 export interface McpInputSchema {
   type: 'object';
   properties: Record<string, unknown>;
@@ -37,7 +39,10 @@ export interface McpRouteTool {
   // DELETE carries one where the deletion needs an argument.
   hasBody: boolean;
   inputSchema: McpInputSchema;
+  outputSchema: McpOutputSchema;
   annotations: McpToolAnnotations;
+  // Set by mcpImageTool.
+  images: boolean;
   // The cell of the role matrix the route's guard asserts, published by the guard as
   // `x-permission` on the route's detail. Absent on a route that asks only for
   // project membership.
@@ -63,6 +68,17 @@ export function mcpTool(
   annotations?: McpToolAnnotations,
 ): { 'x-mcp': { tool: string; annotations?: McpToolAnnotations } } {
   return { 'x-mcp': { tool, annotations } };
+}
+
+// Marks a route answering in the shape of ViewAttachmentsResponse as an MCP tool whose images
+// reach the model as image content, not as base64 text.
+export function mcpImageTool(tool: string): { 'x-mcp': { tool: string; images: true } } {
+  return { 'x-mcp': { tool, images: true } };
+}
+
+export interface ViewedAttachments {
+  images: { id: string; filename: string; contentType: string; data: string }[];
+  others: unknown[];
 }
 
 // What the HTTP method alone says about a route. A GET only reads; a DELETE
@@ -108,6 +124,30 @@ interface SchemaShape {
   oneOf?: SchemaShape[];
 }
 
+// t.Nullable() adds OpenAPI's `nullable: true` beside an anyOf that already holds the
+// `{ type: 'null' }` branch. Ajv, which MCP clients use to check arguments, refuses
+// `nullable` without a `type` and so rejects the whole tool. Without a `type` the keyword
+// changes nothing a validator accepts, so it is dropped there.
+function withoutBareNullable(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(withoutBareNullable);
+  if (typeof node !== 'object' || node === null) return node;
+  const schema = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'nullable' && !('type' in schema)) continue;
+    if (key === 'properties' && typeof value === 'object' && value !== null) {
+      out[key] = Object.fromEntries(
+        Object.entries(value).map(([name, field]) => [name, withoutBareNullable(field)]),
+      );
+    } else if (['items', 'additionalProperties', 'not', 'anyOf', 'oneOf', 'allOf'].includes(key)) {
+      out[key] = withoutBareNullable(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function mergeInputSchema(hooks: Record<string, unknown>, pathParams: string[]): McpInputSchema {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -122,7 +162,9 @@ function mergeInputSchema(hooks: Record<string, unknown>, pathParams: string[]):
     let common: string[] | null = null;
     for (const part of parts) {
       if (!part.properties) continue;
-      Object.assign(properties, part.properties);
+      for (const [name, field] of Object.entries(part.properties)) {
+        properties[name] = withoutBareNullable(field);
+      }
       const names = Array.isArray(part.required) ? (part.required as string[]) : [];
       common = common === null ? names : common.filter((n) => names.includes(n));
     }
@@ -160,7 +202,7 @@ function generateRouteTools(app: McpApp): McpRouteTool[] {
       | {
           summary?: string;
           description?: string;
-          'x-mcp'?: { tool?: string; annotations?: McpToolAnnotations };
+          'x-mcp'?: { tool?: string; annotations?: McpToolAnnotations; images?: boolean };
           'x-permission'?: Permission;
         }
       | undefined;
@@ -178,7 +220,9 @@ function generateRouteTools(app: McpApp): McpRouteTool[] {
       pathParams,
       hasBody: hooks.body != null,
       inputSchema: mergeInputSchema(hooks, pathParams),
+      outputSchema: outputSchema(hooks.response),
       permission: detail?.['x-permission'],
+      images: detail?.['x-mcp']?.images === true,
       // Every tool acts on this tracker's own data and reaches nothing outside it,
       // so openWorldHint is false throughout; the route may still override it.
       annotations: {

@@ -1,6 +1,6 @@
 # ── Webhook delivery worker (Bun) — built from the monorepo root ──
 # build context in docker-compose = repository root (.)
-FROM oven/bun:1.4.0-alpine AS base
+FROM oven/bun:1.4.4-alpine AS base
 WORKDIR /app
 
 # 1) Install dependencies from manifests (cacheable layer). All workspace
@@ -18,6 +18,7 @@ COPY packages/agent-tools/package.json ./packages/agent-tools/
 COPY packages/crypto/package.json ./packages/crypto/
 COPY packages/mailer/package.json ./packages/mailer/
 COPY packages/net/package.json ./packages/net/
+COPY packages/storage/package.json ./packages/storage/
 COPY packages/runner/package.json ./packages/runner/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 # --filter worker installs only the worker workspace and its dependency closure.
@@ -30,6 +31,9 @@ RUN bun install --frozen-lockfile --filter worker $INSTALL_FLAGS
 # does not clobber the copied dependencies.
 FROM base AS release
 ENV NODE_ENV=production
+# The build telemetry reports. An extending build passes its own name.
+ARG BUILD_NAME=community
+ENV BUILD_NAME=$BUILD_NAME
 COPY --from=install /app ./
 COPY . .
 

@@ -12,13 +12,13 @@ bun run setup   # "Develop", or "Generate env" for just the .env files
 bun run dev     # api + web together, via Turborepo
 ```
 
-**Develop** writes the env files, generates the secrets, starts Postgres and MinIO, creates
+**Develop** writes the env files, generates the secrets, starts Postgres and RustFS, creates
 the test database, and migrates both. Run it again any time: it restarts the stack and
 re-applies the migrations, keeping the data. It offers another port when one is taken, and
 offers to stop the **Try it** stack, which publishes the same ones.
 
 `bun run dev` runs the workspace in watch mode: web on <http://localhost:3001>, api on
-<http://localhost:3000>, MinIO console on <http://localhost:9001>. Only Postgres and MinIO
+<http://localhost:3000>, RustFS console on <http://localhost:9001/rustfs/console/>. Only Postgres and RustFS
 run in Docker; the apps run on the host.
 
 ## Environment
@@ -52,7 +52,8 @@ pnpm: the lockfile is `bun.lock`.
 
 Integration tests against a real Postgres, not mocks. The setup prepared a separate `*_test`
 database with `.env.test` pointing at it; the name must contain "test", since the reset
-helper TRUNCATEs every table between tests and refuses otherwise.
+helper empties every table between tests and refuses otherwise. The api suite runs in
+parallel workers on copies of it, named `<name>_1` … `<name>_5`.
 
 ```bash
 bun run test

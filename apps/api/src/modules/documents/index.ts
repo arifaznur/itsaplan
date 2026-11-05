@@ -1,24 +1,29 @@
+import { documentCollaborationRoutes } from './collaboration-routes';
 import { Elysia, t } from 'elysia';
 import { authContext } from '#shared/auth-context';
-import { assertPermission, requireUser } from '#shared/access';
+import { assertPermission, getProjectAccess, requireUser } from '#shared/access';
 import { guards } from '#shared/guards';
 import { noContent } from '#shared/http';
 import { HttpError } from '#shared/lib';
-import { mcpTool } from '#mcp/generate';
+import { mcpImageTool, mcpTool } from '#mcp/generate';
 import { commonErrors, errors } from '#shared/responses';
-import { getMembership } from '#modules/members/service';
-import { rawAttachmentQuery } from '#modules/attachments/model';
+import { importAttachmentBody, rawAttachmentQuery } from '#modules/attachments/model';
 import {
-  assertAttachmentUploadAllowed,
-  attachmentObjectKey,
   attachmentObjectResponse,
   deleteAttachmentObject,
+  readImportedFile,
   safeAttachmentFilename,
-  storeAttachmentObject,
+  VIEWABLE_IMAGES,
 } from '#modules/attachments/storage';
+import {
+  getChatAttachmentByPublicId,
+  readAttachmentBytes,
+  viewFile,
+} from '#modules/chat-attachments/service';
 import {
   createDocumentBody,
   deleteDocumentQuery,
+  documentAssetFromChatBody,
   documentAssetParams,
   documentAccessBody,
   documentOwnershipBody,
@@ -28,6 +33,7 @@ import {
   DocumentAssetListResponse,
   DocumentAssetResponse,
   DocumentPreferenceResponse,
+  DocumentInitiativeLinkListResponse,
   DocumentIssueLinkListResponse,
   DocumentIssueLinkResponse,
   IssueDocumentLinkListResponse,
@@ -48,12 +54,12 @@ import {
   updateDocumentBody,
   updateDocumentPreferenceBody,
   uploadDocumentAssetBody,
+  ViewDocumentAssetResponse,
 } from './model';
 import {
   archiveDocument,
   assertDocumentAssetUploadTarget,
   createDocument,
-  createDocumentAsset,
   deleteDocument,
   deleteDocumentAsset,
   duplicateDocument,
@@ -69,13 +75,16 @@ import {
   setDocumentAccess,
   setDocumentLocked,
   setDocumentPreference,
+  storeDocumentAsset,
   transferDocumentOwnership,
   updateDocument,
   type DocumentAssetRow,
+  documentAssetPath,
 } from './service';
 import {
   addDocumentInitiativeLink,
   addDocumentIssueLink,
+  listDocumentInitiativeLinks,
   listDocumentIssueLinks,
   listInitiativeDocumentLinks,
   listIssueDocumentLinks,
@@ -83,7 +92,12 @@ import {
   removeDocumentIssueLink,
 } from './links';
 
-function documentAssetDto(projectKey: string, documentId: number, asset: DocumentAssetRow) {
+function documentAssetDto(
+  project: { teamId: number; key: string },
+  documentId: number,
+  asset: DocumentAssetRow,
+) {
+  const url = documentAssetPath(project, documentId, asset.publicId);
   return {
     id: asset.publicId,
     filename: asset.filename,
@@ -91,12 +105,18 @@ function documentAssetDto(projectKey: string, documentId: number, asset: Documen
     sizeBytes: asset.sizeBytes,
     uploadedByUserId: asset.uploadedByUserId,
     createdAt: asset.createdAt,
-    url: `/projects/${encodeURIComponent(projectKey)}/documents/${documentId}/assets/${asset.publicId}/raw`,
+    url,
+    // The web serves a page's files through its own route.
+    embedUrl: `/protected-media${url}`,
   };
 }
 
+const OWNER_ONLY = 'Only the page owner can do this, or a project owner on a public page.';
+const EMBED_HINT =
+  'It does not appear in the page by itself: add `embedUrl` from the result to the page text, as ![name](embedUrl) for an image or [name](embedUrl) for a file.';
+
 async function isProjectOwner(projectId: number, userId: string): Promise<boolean> {
-  return (await getMembership(projectId, userId)) === 'owner';
+  return (await getProjectAccess(projectId, userId))?.role === 'owner';
 }
 
 export const documentRoutes = new Elysia({
@@ -105,6 +125,7 @@ export const documentRoutes = new Elysia({
 })
   .use(authContext)
   .use(guards)
+  .use(documentCollaborationRoutes)
   .get(
     '/projects/:projectKey/documents',
     async ({ project, query, user }) =>
@@ -114,6 +135,7 @@ export const documentRoutes = new Elysia({
       }),
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       query: listDocumentsQuery,
       response: { 200: DocumentSummaryListResponse, ...commonErrors },
       detail: {
@@ -133,6 +155,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       response: { 200: DocumentResponse, ...commonErrors },
       detail: {
@@ -158,6 +181,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       response: { 200: DocumentIssueLinkListResponse, ...commonErrors },
       detail: {
@@ -184,6 +208,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: linkDocumentIssueBody,
       response: { 201: DocumentIssueLinkResponse, ...commonErrors, ...errors(409) },
@@ -211,6 +236,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentIssueParams,
       response: { 204: t.Void(), ...commonErrors },
       detail: {
@@ -231,6 +257,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['work_items', 'read'],
+      feature: 'documents',
       params: issueDocumentsParams,
       response: { 200: IssueDocumentLinkListResponse, ...commonErrors },
       detail: {
@@ -251,13 +278,34 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['initiatives', 'read'],
-      feature: 'initiatives',
+      feature: ['initiatives', 'documents'],
       params: initiativeDocumentsParams,
       response: { 200: IssueDocumentLinkListResponse, ...commonErrors },
       detail: {
         summary: 'List Docs linked to an initiative',
         description: 'Return visible Docs pages explicitly linked to one initiative.',
         ...mcpTool('list_initiative_documents'),
+      },
+    },
+  )
+  .get(
+    '/projects/:projectKey/documents/:documentId/initiatives',
+    async ({ project, params, user }) => {
+      const current = requireUser(user);
+      await assertPermission(project.id, current, 'initiatives', 'read');
+      const links = await listDocumentInitiativeLinks(project.id, params.documentId, current.id);
+      if (!links) throw new HttpError(404, 'Document not found');
+      return links;
+    },
+    {
+      permission: ['documents', 'read'],
+      feature: ['initiatives', 'documents'],
+      params: documentParams,
+      response: { 200: DocumentInitiativeLinkListResponse, ...commonErrors },
+      detail: {
+        summary: 'List initiatives linked to a document',
+        description: 'Return initiatives explicitly linked to one visible Docs page.',
+        ...mcpTool('list_document_initiatives'),
       },
     },
   )
@@ -277,7 +325,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
-      feature: 'initiatives',
+      feature: ['initiatives', 'documents'],
       params: documentParams,
       body: linkDocumentInitiativeBody,
       response: { 201: IssueDocumentLinkResponse, ...commonErrors, ...errors(409) },
@@ -305,7 +353,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
-      feature: 'initiatives',
+      feature: ['initiatives', 'documents'],
       params: documentInitiativeParams,
       response: { 204: t.Void(), ...commonErrors },
       detail: {
@@ -320,15 +368,17 @@ export const documentRoutes = new Elysia({
     async ({ project, params, user }) => {
       const assets = await listDocumentAssets(project.id, params.documentId, requireUser(user).id);
       if (!assets) throw new HttpError(404, 'Document not found');
-      return assets.map((asset) => documentAssetDto(project.key, params.documentId, asset));
+      return assets.map((asset) => documentAssetDto(project, params.documentId, asset));
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       response: { 200: DocumentAssetListResponse, ...commonErrors },
       detail: {
         summary: 'List document assets',
-        description: 'List files embedded in a visible Docs page.',
+        description:
+          'List the files of a visible Docs page. Open one with view_document_asset: `url` needs a session.',
         ...mcpTool('list_document_assets'),
       },
     },
@@ -342,32 +392,20 @@ export const documentRoutes = new Elysia({
       }
       const file = body.file;
       if (!(file instanceof File) || file.size === 0) throw new HttpError(400, 'File is empty');
-      const filename = safeAttachmentFilename(file.name);
-      const contentType = file.type || 'application/octet-stream';
-      await assertAttachmentUploadAllowed(project.id, file.size, contentType);
-      const key = attachmentObjectKey(project.id, 'documents', params.documentId, filename);
-      const bytes = Buffer.from(await file.arrayBuffer());
-      await storeAttachmentObject(key, bytes, contentType);
-      try {
-        const asset = await createDocumentAsset({
-          projectId: project.id,
-          documentId: params.documentId,
-          userId,
-          s3Key: key,
-          filename,
-          contentType,
-          sizeBytes: bytes.length,
-        });
-        if (!asset) throw new HttpError(404, 'Document not found');
-        set.status = 201;
-        return documentAssetDto(project.key, params.documentId, asset);
-      } catch (error) {
-        await deleteAttachmentObject(key);
-        throw error;
-      }
+      const asset = await storeDocumentAsset({
+        projectId: project.id,
+        documentId: params.documentId,
+        userId,
+        filename: safeAttachmentFilename(file.name),
+        contentType: file.type || 'application/octet-stream',
+        bytes: Buffer.from(await file.arrayBuffer()),
+      });
+      set.status = 201;
+      return documentAssetDto(project, params.documentId, asset);
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: uploadDocumentAssetBody,
       response: { 201: DocumentAssetResponse, ...commonErrors, ...errors(409, 413, 502) },
@@ -375,6 +413,99 @@ export const documentRoutes = new Elysia({
         summary: 'Upload a document asset',
         description:
           'Store a file for an active, unlocked Docs page. Instance MIME, file-size and project-quota limits apply.',
+      },
+    },
+  )
+  .post(
+    '/projects/:projectKey/documents/:documentId/assets/import',
+    async ({ project, params, user, body, set }) => {
+      const userId = requireUser(user).id;
+      if (!(await assertDocumentAssetUploadTarget(project.id, params.documentId, userId))) {
+        throw new HttpError(404, 'Document not found');
+      }
+      const { bytes, contentType } = await readImportedFile(body);
+      const asset = await storeDocumentAsset({
+        projectId: project.id,
+        documentId: params.documentId,
+        userId,
+        filename: safeAttachmentFilename(body.filename),
+        contentType,
+        bytes,
+      });
+      set.status = 201;
+      return documentAssetDto(project, params.documentId, asset);
+    },
+    {
+      permission: ['documents', 'edit'],
+      feature: 'documents',
+      params: documentParams,
+      body: importAttachmentBody,
+      response: { 201: DocumentAssetResponse, ...commonErrors, ...errors(409, 413, 502) },
+      detail: {
+        summary: 'Add a document asset from a URL or base64',
+        description: `Store a file for an active, unlocked Docs page, from \`url\` or \`contentBase64\`. ${EMBED_HINT}`,
+        ...mcpTool('add_document_asset'),
+      },
+    },
+  )
+  .post(
+    '/projects/:projectKey/documents/:documentId/assets/from-chat',
+    async ({ project, params, user, body, set }) => {
+      const current = requireUser(user);
+      await assertPermission(project.id, current, 'ai_agents', 'read');
+      if (!(await assertDocumentAssetUploadTarget(project.id, params.documentId, current.id))) {
+        throw new HttpError(404, 'Document not found');
+      }
+      const source = await getChatAttachmentByPublicId(body.chatAttachmentId);
+      if (source?.projectId !== project.id) throw new HttpError(404, 'Attachment not found');
+      const asset = await storeDocumentAsset({
+        projectId: project.id,
+        documentId: params.documentId,
+        userId: current.id,
+        filename: source.filename,
+        contentType: source.contentType,
+        bytes: await readAttachmentBytes(source.s3Key),
+      });
+      set.status = 201;
+      return documentAssetDto(project, params.documentId, asset);
+    },
+    {
+      permission: ['documents', 'edit'],
+      feature: 'documents',
+      params: documentParams,
+      body: documentAssetFromChatBody,
+      response: { 201: DocumentAssetResponse, ...commonErrors, ...errors(409, 413, 502) },
+      detail: {
+        summary: 'Copy a chat attachment into a document',
+        description: `Copy a file attached in the chat of this project into an active, unlocked Docs page. The id is in the [file: "name" (attachment id: …)] marker, and the chat keeps its file. ${EMBED_HINT}`,
+        ...mcpTool('add_document_asset_from_chat'),
+      },
+    },
+  )
+  .get(
+    '/projects/:projectKey/documents/:documentId/assets/:publicId/view',
+    async ({ project, params, user }) => {
+      const asset = await getDocumentAsset(
+        project.id,
+        params.documentId,
+        params.publicId,
+        requireUser(user).id,
+      );
+      if (!asset) throw new HttpError(404, 'Asset not found');
+      return viewFile(asset, documentAssetDto(project, params.documentId, asset));
+    },
+    {
+      permission: ['documents', 'read'],
+      feature: 'documents',
+      params: documentAssetParams,
+      response: { 200: ViewDocumentAssetResponse, ...commonErrors, ...errors(502) },
+      detail: {
+        summary: 'View a document asset',
+        description:
+          `Open one file of a Docs page. An image comes back as the image itself (${VIEWABLE_IMAGES}). ` +
+          'Any other file comes back in `others` and, for a PDF or a text file, carries its full ' +
+          'text; for a spreadsheet or document (.xlsx, .csv, .docx), its column headers and first rows.',
+        ...mcpImageTool('view_document_asset'),
       },
     },
   )
@@ -398,6 +529,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentAssetParams,
       query: rawAttachmentQuery,
       response: { ...commonErrors },
@@ -424,11 +556,13 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'delete'],
+      feature: 'documents',
       params: documentAssetParams,
       response: { 204: t.Void(), ...commonErrors, ...errors(409) },
       detail: {
         summary: 'Delete a document asset',
-        description: 'Delete one asset from an active, unlocked Docs page.',
+        description: `Delete one asset from an active, unlocked Docs page. Irreversible. The page text keeps its reference, so remove that with update_document. ${OWNER_ONLY}`,
+        ...mcpTool('delete_document_asset'),
       },
     },
   )
@@ -441,6 +575,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       response: { 200: DocumentExportResponse, ...commonErrors },
       detail: {
@@ -463,6 +598,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       response: { 200: DocumentRevisionListResponse, ...commonErrors },
       detail: {
@@ -486,6 +622,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentRevisionParams,
       response: { 200: DocumentRevisionResponse, ...commonErrors },
       detail: {
@@ -514,6 +651,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'create'],
+      feature: 'documents',
       body: createDocumentBody,
       response: { 201: DocumentResponse, ...commonErrors },
       detail: {
@@ -538,6 +676,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: updateDocumentBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
@@ -565,6 +704,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: documentAccessBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
@@ -593,6 +733,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: documentOwnershipBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
@@ -621,10 +762,15 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: documentVersionBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
-      detail: { summary: 'Lock a document', ...mcpTool('lock_document') },
+      detail: {
+        summary: 'Lock a document',
+        description: `Lock a page against changes. ${OWNER_ONLY}`,
+        ...mcpTool('lock_document'),
+      },
     },
   )
   .post(
@@ -644,10 +790,15 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentParams,
       body: documentVersionBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
-      detail: { summary: 'Unlock a document', ...mcpTool('unlock_document') },
+      detail: {
+        summary: 'Unlock a document',
+        description: `Unlock a page so it can be changed again. ${OWNER_ONLY}`,
+        ...mcpTool('unlock_document'),
+      },
     },
   )
   .post(
@@ -666,13 +817,13 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'delete'],
+      feature: 'documents',
       params: documentParams,
       body: documentVersionBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
       detail: {
         summary: 'Archive a document tree',
-        description:
-          'Archive a page and all descendants without deleting their content or history.',
+        description: `Archive a page and all descendants without deleting their content or history. ${OWNER_ONLY}`,
         ...mcpTool('archive_document'),
       },
     },
@@ -693,13 +844,13 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'delete'],
+      feature: 'documents',
       params: documentParams,
       body: documentVersionBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
       detail: {
         summary: 'Restore a document tree',
-        description:
-          'Restore an archived page and its descendants. It returns to the root if its parent remains archived.',
+        description: `Restore an archived page and its descendants. It returns to the root if its parent remains archived. ${OWNER_ONLY}`,
         ...mcpTool('restore_document'),
       },
     },
@@ -721,6 +872,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'create'],
+      feature: 'documents',
       params: documentParams,
       body: duplicateDocumentBody,
       response: { 201: DocumentResponse, ...commonErrors, ...errors(409, 413, 502) },
@@ -746,6 +898,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'read'],
+      feature: 'documents',
       params: documentParams,
       body: updateDocumentPreferenceBody,
       response: { 200: DocumentPreferenceResponse, ...commonErrors },
@@ -771,6 +924,7 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'edit'],
+      feature: 'documents',
       params: documentRevisionParams,
       body: documentVersionBody,
       response: { 200: DocumentResponse, ...commonErrors, ...errors(409) },
@@ -801,13 +955,13 @@ export const documentRoutes = new Elysia({
     },
     {
       permission: ['documents', 'delete'],
+      feature: 'documents',
       params: documentParams,
       query: deleteDocumentQuery,
       response: { 204: t.Void(), ...commonErrors, ...errors(409) },
       detail: {
         summary: 'Delete a document',
-        description:
-          'Permanently delete an archived document and its history. Its child pages move to the project root.',
+        description: `Permanently delete an archived document and its history. Its child pages move to the project root. ${OWNER_ONLY}`,
         ...mcpTool('delete_document'),
       },
     },

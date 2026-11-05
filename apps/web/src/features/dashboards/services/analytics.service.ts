@@ -5,8 +5,10 @@
 
 import { useQuery } from '@tanstack/react-query';
 import {
+  type BurnupParams,
   type PulseUnit,
   getBreakdown,
+  getBurnup,
   getPulse,
   getThroughput,
   getAgentRuns,
@@ -25,10 +27,17 @@ export function useBreakdownQuery(projectKey: string, by: BreakdownBy) {
   });
 }
 
-export function usePulseQuery(projectKey: string, unit: PulseUnit, columns: number) {
+export function usePulseQuery(
+  projectKey: string,
+  unit: PulseUnit,
+  columns: number,
+  scope: 'project' | 'me' = 'project',
+  currentUserId?: string | null,
+) {
   return useQuery({
-    queryKey: qk.analytics(projectKey, 'pulse', { unit, columns }),
-    queryFn: () => getPulse(projectKey, unit, columns),
+    queryKey: qk.analytics(projectKey, 'pulse', { unit, columns, scope, currentUserId }),
+    queryFn: () => getPulse(projectKey, unit, columns, scope),
+    enabled: scope !== 'me' || Boolean(currentUserId),
   });
 }
 
@@ -36,6 +45,13 @@ export function useThroughputQuery(projectKey: string, weeks: number) {
   return useQuery({
     queryKey: qk.analytics(projectKey, 'throughput', { weeks }),
     queryFn: () => getThroughput(projectKey, weeks),
+  });
+}
+
+export function useBurnupQuery(projectKey: string, params: BurnupParams) {
+  return useQuery({
+    queryKey: qk.analytics(projectKey, 'burnup', params),
+    queryFn: () => getBurnup(projectKey, params),
   });
 }
 

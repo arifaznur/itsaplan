@@ -29,6 +29,9 @@ describe('document export', () => {
       'release-notes-2026.md',
     );
     assert.equal(documentExportFilename('', 'html'), 'untitled.html');
+    assert.equal(documentExportFilename('Заметки к релизу', 'markdown'), 'zametki-k-relizu.md');
+    assert.equal(documentExportFilename('Café São Paulo', 'html'), 'cafe-sao-paulo.html');
+    assert.equal(documentExportFilename('★', 'html'), 'untitled.html');
     assert.equal(documentExportArchiveFilename('Release notes 2026'), 'release-notes-2026.zip');
   });
 
@@ -67,7 +70,6 @@ describe('document export', () => {
       content: '',
       richHtml: `<p><img src="${protectedAsset}"><a href="${protectedAsset}">Download</a><img src="/protected-media/projects/SEKTA/documents/99/assets/123e4567-e89b-12d3-a456-426614174000/raw"><img src="https://evil.example${protectedAsset}"><a href="https://example.test/public.png">External</a></p>`,
       format: 'html',
-      projectKey: 'SEKTA',
       documentId: 42,
       baseUrl: 'https://plan.example.test',
       fetchImpl: async (input, init) => {
@@ -95,13 +97,37 @@ describe('document export', () => {
     assert.match(html, /https:\/\/example\.test\/public\.png/);
   });
 
+  it('inlines an asset whose URL names the project by its ref', async () => {
+    const refAsset =
+      '/protected-media/projects/12.SEKTA/documents/42/assets/123e4567-e89b-12d3-a456-426614174001/raw';
+    const calls: string[] = [];
+    await createPortableDocumentExport({
+      title: 'Guide',
+      content: '',
+      richHtml: `<p><img src="${protectedAsset}"><img src="${refAsset}"></p>`,
+      format: 'html',
+      documentId: 42,
+      baseUrl: 'https://plan.example.test',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    assert.deepEqual(calls, [
+      `https://plan.example.test${protectedAsset}`,
+      `https://plan.example.test${refAsset}`,
+    ]);
+  });
+
   it('does not preserve active asset MIME types in portable HTML', async () => {
     const result = await createPortableDocumentExport({
       title: 'Guide',
       content: '',
       richHtml: `<a href="${protectedAsset}">Download diagram</a>`,
       format: 'html',
-      projectKey: 'SEKTA',
       documentId: 42,
       baseUrl: 'https://plan.example.test',
       fetchImpl: async () =>
@@ -121,7 +147,6 @@ describe('document export', () => {
       title: 'Guide',
       content: `![Diagram](${protectedAsset})\n\n[Download](${protectedAsset})\n\n[External](https://example.test/public.pdf)`,
       format: 'markdown',
-      projectKey: 'SEKTA',
       documentId: 42,
       baseUrl: 'https://plan.example.test',
       fetchImpl: async () => {
@@ -150,7 +175,6 @@ describe('document export', () => {
       title: 'Guide',
       content: '[External](https://example.test/public.pdf)',
       format: 'markdown',
-      projectKey: 'SEKTA',
       documentId: 42,
       baseUrl: 'https://plan.example.test',
       fetchImpl: async () => {
@@ -180,7 +204,6 @@ describe('document export', () => {
         title: 'Guide',
         content,
         format: 'markdown',
-        projectKey: 'SEKTA',
         documentId: 42,
         baseUrl: 'https://plan.example.test',
         fetchImpl: async () => {
@@ -199,7 +222,6 @@ describe('document export', () => {
         title: 'Guide',
         content: `![Diagram](${protectedAsset})`,
         format: 'markdown',
-        projectKey: 'SEKTA',
         documentId: 42,
         baseUrl: 'https://plan.example.test',
         fetchImpl: async () =>

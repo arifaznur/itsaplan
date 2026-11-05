@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react';
 import { type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import {
   Bold,
+  CheckSquare2,
   Code,
   Heading1,
   Heading2,
@@ -77,18 +79,23 @@ const ITEMS: {
 export default function EditorSelectionMenu({
   editor,
   placement = 'top',
+  taskList = false,
+  children,
 }: {
   editor: Editor;
+  children?: ReactNode;
   // Above the selection by default. A field with a label right over it passes
   // "bottom" so the menu does not cover the label.
   placement?: 'top' | 'bottom';
+  // Only where the task-list extensions are registered.
+  taskList?: boolean;
 }) {
   const t = useTranslations('common.editor');
   return (
     <BubbleMenu
       editor={editor}
       options={{ placement }}
-      className="flex items-center gap-0.5 rounded-md border bg-popover p-1 shadow-md"
+      className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-0.5 rounded-md border bg-popover p-1 shadow-md"
     >
       {ITEMS.map((item) => (
         <EditorToolbarButton
@@ -99,6 +106,16 @@ export default function EditorSelectionMenu({
           <item.icon />
         </EditorToolbarButton>
       ))}
+      {taskList && (
+        <EditorToolbarButton
+          active={editor.isActive('taskList')}
+          title={t('todoList')}
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+        >
+          <CheckSquare2 />
+        </EditorToolbarButton>
+      )}
+      {children}
     </BubbleMenu>
   );
 }

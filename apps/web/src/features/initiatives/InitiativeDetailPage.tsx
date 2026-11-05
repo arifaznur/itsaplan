@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useShell } from '@/context/shellContext';
 import { useLiveRefresh } from '@/hooks/useLiveRefresh';
@@ -8,6 +8,7 @@ import { revScope } from '@/utils/revScopes';
 import { initiativePath, type InitiativeTab } from '@/utils/paths';
 import { qk } from '@/services/queryKeys';
 import { useInitiativeQuery } from '@/services/initiatives.service';
+import { titlePath, useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import PageSkeleton from '@/components/common/skeleton/PageSkeleton';
 import InitiativeHeader from './components/detail/InitiativeHeader';
@@ -19,32 +20,38 @@ import InitiativeProgress from './components/detail/InitiativeProgress';
 // it is going (Progress) and the work items board over its linked issues (Issues).
 // Each tab is its own route, so the open tab survives a reload; the route that
 // mounts this page passes it.
-export default function InitiativeDetailPage({ tab = 'overview' }: { tab?: InitiativeTab }) {
+export default function InitiativeDetailPage({
+  initiativeId,
+  tab = 'overview',
+}: {
+  initiativeId: number;
+  tab?: InitiativeTab;
+}) {
   const t = useTranslations('initiatives');
   const { project } = useShell();
   const router = useRouter();
-  const params = useParams();
-  const raw = Array.isArray(params.initiativeId) ? params.initiativeId[0] : params.initiativeId;
-  const initiativeId = raw ? Number(raw) : null;
 
   const query = useInitiativeQuery(initiativeId);
-  const projectKey = project?.project.key ?? '';
+  const projectKey = project?.project.ref ?? '';
+  useDocumentTitle(
+    titlePath(project?.project.name, !query.isError && query.data?.title, t(`detailTabs.${tab}`)),
+  );
 
   // Refetch the initiative (progress/health), its files, its linked Docs, its feed
   // and the board issues when its linked issues or its own fields change.
   useLiveRefresh({
-    scope: initiativeId != null ? revScope.initiative(initiativeId) : null,
+    scope: revScope.initiative(initiativeId),
     targets: [
-      qk.initiative(initiativeId ?? 0),
-      qk.initiativeAttachments(initiativeId ?? 0),
-      qk.initiativeDocumentLinks(projectKey, initiativeId ?? 0),
-      qk.initiativeFeed(initiativeId ?? 0),
+      qk.initiative(initiativeId),
+      qk.initiativeAttachments(initiativeId),
+      qk.initiativeDocumentLinks(projectKey, initiativeId),
+      qk.initiativeFeed(initiativeId),
       qk.boardIssues(projectKey),
     ],
     enabled: !!projectKey,
   });
 
-  if (!project || initiativeId == null) return null;
+  if (!project) return null;
 
   const initiative = query.data;
 

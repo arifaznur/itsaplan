@@ -1,13 +1,17 @@
 import { Elysia, t } from 'elysia';
 import { noContent } from '#shared/http';
 import { authContext } from '#shared/auth-context';
-import { entityGuard } from '#shared/guards';
+import { assertMcpAllowed, assertProjectReachable, entityGuard } from '#shared/guards';
+import { assertPermission } from '#shared/access';
 import { HttpError } from '#shared/lib';
-import { pinnedFetch } from '#shared/net';
-import { mcpTool } from '#mcp/generate';
+import { mcpImageTool, mcpTool } from '#mcp/generate';
 import { accessErrors, commonErrors, errors } from '#shared/responses';
 import { getIssueProjectId } from '#modules/issues/service';
-import { getStorageSettings, MB } from '#modules/settings/service';
+import { viewFile } from '#modules/chat-attachments/service';
+import {
+  getInitiativeAttachment,
+  getInitiativeAttachmentProjectId,
+} from '#modules/initiatives/attachments';
 import {
   AttachmentResponse,
   AttachmentListResponse,
@@ -16,6 +20,8 @@ import {
   publicIdParams,
   rawAttachmentQuery,
   uploadAttachmentBody,
+  viewAttachmentQuery,
+  ViewAttachmentsResponse,
 } from './model';
 import {
   createAttachment,
@@ -31,14 +37,19 @@ import {
   attachmentObjectKey,
   attachmentObjectResponse,
   deleteAttachmentObject,
+  readImportedFile,
   safeAttachmentFilename,
   storeAttachmentObject,
+  viewAttachments,
+  VIEWABLE_IMAGES,
 } from './storage';
+
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 // Public shape returned to the UI: never exposes the internal serial id or the
 // object key. `url` is the public, no-auth download route — it can be embedded in
 // an issue description and fetched by external services.
-function attachmentDto(a: AttachmentRow) {
+function attachmentDto(a: Omit<AttachmentRow, 'id' | 'issueId'>) {
   return {
     id: a.publicId,
     filename: a.filename,
@@ -66,6 +77,29 @@ export const attachmentRoutes = new Elysia({
       if (!existing) return null;
       return getIssueProjectId(existing.issueId);
     }),
+    // For /attachments/view, which takes the attachment of an issue or an initiative:
+    // the checks entityGuard makes, for whichever of the two it is.
+    viewableAttachment: {
+      async resolve({ query, user, request }) {
+        const id = String(query.attachment ?? '').match(UUID)?.[0];
+        if (!id) throw new HttpError(404, 'Attachment not found');
+        const issueRow = await getAttachmentByPublicId(id);
+        if (issueRow) {
+          const projectId = await getIssueProjectId(issueRow.issueId);
+          if (projectId == null) throw new HttpError(404, 'Attachment not found');
+          await assertPermission(projectId, user, 'work_items', 'read');
+          await assertMcpAllowed(projectId, request.headers);
+          return { viewed: { row: issueRow, dto: attachmentDto(issueRow) } };
+        }
+        const row = await getInitiativeAttachment(id);
+        const projectId = await getInitiativeAttachmentProjectId(id);
+        if (!row || projectId == null) throw new HttpError(404, 'Attachment not found');
+        await assertPermission(projectId, user, 'initiatives', 'read');
+        await assertProjectReachable(projectId, request, 'initiatives');
+        const dto = { ...attachmentDto(row), url: `/initiative-attachments/${id}/raw` };
+        return { viewed: { row, dto } };
+      },
+    },
   })
   .get(
     '/issues/:issueId/attachments',
@@ -128,52 +162,12 @@ export const attachmentRoutes = new Elysia({
     },
   )
 
-  // Adds an attachment from a URL or inline base64, for callers that cannot send a
-  // multipart file (internal agents). Exactly one of url / contentBase64 is given.
-  // A URL is fetched server-side, so it is SSRF-guarded (https only in prod, no
-  // private/local hosts, no redirects) and size-capped like a direct upload.
   .post(
     '/issues/:issueId/attachments/import',
     async ({ params, body, set, projectId }) => {
       const issueId = params.issueId;
       const filename = safeAttachmentFilename(body.filename);
-      const { url, contentBase64 } = body;
-      if ((url == null) === (contentBase64 == null)) {
-        throw new HttpError(400, 'Provide exactly one of url or contentBase64');
-      }
-      const limits = await getStorageSettings();
-
-      let bytes: Buffer;
-      let contentType: string;
-      if (url != null) {
-        let res: Response;
-        try {
-          res = await pinnedFetch(url, { timeoutMs: 15000 });
-        } catch (err) {
-          if (err instanceof HttpError) throw err;
-          throw new HttpError(400, 'Could not fetch the url');
-        }
-        if (res.status >= 300 && res.status < 400) {
-          throw new HttpError(400, 'The url redirects; provide the final url');
-        }
-        if (!res.ok) throw new HttpError(400, `Could not fetch the url (status ${res.status})`);
-        const declared = Number(res.headers.get('content-length') ?? '');
-        if (declared && declared > limits.maxAttachmentMb * MB) {
-          throw new HttpError(413, `File exceeds the ${limits.maxAttachmentMb} MB limit`);
-        }
-        bytes = Buffer.from(await res.arrayBuffer());
-        contentType =
-          body.contentType ||
-          res.headers.get('content-type')?.split(';')[0]?.trim() ||
-          'application/octet-stream';
-      } else {
-        bytes = Buffer.from(contentBase64 as string, 'base64');
-        if (bytes.length === 0)
-          throw new HttpError(400, 'contentBase64 is empty or not valid base64');
-        contentType = body.contentType || 'application/octet-stream';
-      }
-
-      if (bytes.length === 0) throw new HttpError(400, 'The file is empty');
+      const { bytes, contentType } = await readImportedFile(body);
       await assertAttachmentUploadAllowed(projectId, bytes.length, contentType);
 
       const key = attachmentObjectKey(projectId, 'attachments', issueId, filename);
@@ -277,6 +271,39 @@ export const attachmentRoutes = new Elysia({
         summary: 'Delete an attachment',
         description: 'Delete an attachment. Irreversible.',
         ...mcpTool('delete_attachment'),
+      },
+    },
+  )
+
+  .get('/attachments/view', ({ viewed }) => viewFile(viewed.row, viewed.dto), {
+    query: viewAttachmentQuery,
+    viewableAttachment: true,
+    response: { 200: ViewAttachmentsResponse, ...commonErrors, ...errors(502) },
+    detail: {
+      summary: 'View an attachment',
+      description:
+        'Open one attachment of an issue or an initiative, given the url a result carries ' +
+        `for it or its id. An image comes back as the image itself (${VIEWABLE_IMAGES}). ` +
+        'Any other file comes back in `others` with its url and, for a PDF or a text file, ' +
+        'its full text; for a spreadsheet or document (.xlsx, .csv, .docx), its column ' +
+        'headers and first rows. A scanned PDF has no text to read.',
+      ...mcpImageTool('view_attachment'),
+    },
+  })
+
+  .get(
+    '/issues/:issueId/images',
+    async ({ params }) => viewAttachments(await listAttachments(params.issueId), attachmentDto),
+    {
+      params: issueParams,
+      issueAttachment: 'read',
+      response: { 200: ViewAttachmentsResponse, ...commonErrors },
+      detail: {
+        summary: 'View the images of an issue',
+        description:
+          `Look at the images attached to an issue, by its numeric id: ${VIEWABLE_IMAGES}. ` +
+          'Every other attachment comes back in `others` with its url.',
+        ...mcpImageTool('view_issue_images'),
       },
     },
   )

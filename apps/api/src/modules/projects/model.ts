@@ -1,4 +1,5 @@
 import { t } from 'elysia';
+import { PROJECT_KEY_PATTERN } from './key';
 import { PROJECT_FEATURES } from '#shared/features';
 import { ColumnResponse } from '#modules/columns/model';
 import { CustomFieldResponse } from '#modules/custom-fields/model';
@@ -6,6 +7,8 @@ import { IssueTemplateResponse } from '#modules/issue-templates/model';
 import { IssueTypeResponse } from '#modules/issue-types/model';
 import { LabelGroupResponse, LabelResponse } from '#modules/labels/model';
 import { PermissionMatrixSchema } from '#shared/permissions';
+import { AccessViaSchema } from '#shared/workspace-roles';
+import { pageQueryFields, pageResponse } from '#shared/pagination';
 import { ISSUE_TYPE_PRESET_KEYS } from './service';
 import { COPY_INCLUDE_KEYS } from './copy';
 
@@ -13,15 +16,21 @@ import { COPY_INCLUDE_KEYS } from './copy';
 // input tokens each time, so it is capped on the way in and cut again in the prompt.
 export const PROJECT_DESCRIPTION_LIMIT = 2000;
 
+const projectKey = t.String({
+  pattern: PROJECT_KEY_PATTERN,
+  description: 'Upper-case letters and digits, starting with a letter, up to 10 characters.',
+});
+
 const projectBody = t.Object({
-  key: t.String({ minLength: 1 }),
+  key: projectKey,
   name: t.String({ minLength: 1 }),
   description: t.Optional(t.String({ maxLength: PROJECT_DESCRIPTION_LIMIT })),
 });
 
 // Create adds the issue-type preset: which set of types the new project starts with.
 // Omitted → "general" (a single Task). Copy takes its types from the source project,
-// so the preset applies to create only.
+// and a project created from a template from the template, so the preset applies to
+// neither.
 export const createProjectBody = t.Composite([
   projectBody,
   t.Object({
@@ -31,31 +40,103 @@ export const createProjectBody = t.Composite([
         { description: `Issue-type preset: ${ISSUE_TYPE_PRESET_KEYS.join(', ')}.` },
       ),
     ),
-  }),
-]);
-
-// Copy adds an optional selection of which parts of the source project to carry over.
-// Omitted → the source project's structure (states, types, labels, custom fields,
-// views, dashboards, documents, actions). Each flag maps to a project section
-// menu; the service force-enables dependencies.
-export const copyProjectBody = t.Composite([
-  projectBody,
-  t.Object({
-    include: t.Optional(
-      t.Object(Object.fromEntries(COPY_INCLUDE_KEYS.map((k) => [k, t.Optional(t.Boolean())]))),
+    templateId: t.Optional(
+      t.Integer({
+        description:
+          'A project template open to the team (list_project_templates) to create the ' +
+          'project from. The project then starts with what the template holds, and preset ' +
+          'is not used.',
+      }),
     ),
   }),
 ]);
 
+// Which parts of a source project a copy carries over. A key the core does not name
+// selects a section an extension of the api adds.
+export const copyInclude = t.Optional(
+  t.Object(Object.fromEntries(COPY_INCLUDE_KEYS.map((k) => [k, t.Optional(t.Boolean())])), {
+    additionalProperties: t.Boolean(),
+  }),
+);
+
+// Copy adds an optional selection of which parts of the source project to carry over.
+// Omitted → the source project's structure (states, types, labels, custom fields,
+// issue templates, views, dashboards, documents, actions). Each flag maps to a project
+// section menu; the service force-enables dependencies.
+export const copyProjectBody = t.Composite([projectBody, t.Object({ include: copyInclude })]);
+
 export const updateProjectBody = t.Object({
+  key: t.Optional(projectKey),
   name: t.Optional(t.String({ minLength: 1 })),
   description: t.Optional(t.String({ maxLength: PROJECT_DESCRIPTION_LIMIT })),
 });
 
+export const ProjectPreferencesResponse = t.Object({
+  isFavorite: t.Boolean(),
+  isHidden: t.Boolean(),
+});
+
+export const updateProjectPreferencesBody = t.Object(
+  {
+    isFavorite: t.Optional(t.Boolean()),
+    isHidden: t.Optional(t.Boolean()),
+  },
+  { minProperties: 1 },
+);
+
+const projectSearch = t.Optional(
+  t.String({
+    description: 'Case-insensitive literal substring of the project key, name, or description.',
+  }),
+);
+const projectSort = t.Optional(
+  t.UnionEnum(['key', 'name', 'created', 'activity'], {
+    description:
+      'Sort by key (default), name, newest creation, or newest work-item activity/comment. ' +
+      'Activity puts projects without activity last. Ties are ordered by key.',
+  }),
+);
+const projectTeamId = t.Optional(
+  t.Numeric({
+    minimum: 1,
+    multipleOf: 1,
+    description: 'Limit results to projects in this team that you belong to.',
+  }),
+);
+
 export const listProjectsQuery = t.Object({
+  q: projectSearch,
+  sort: projectSort,
+  teamId: projectTeamId,
   permissions: t.Optional(
     t.String({ description: "'true' to include the caller's permission matrix per project." }),
   ),
+});
+
+export const searchProjectsQuery = t.Object({
+  q: projectSearch,
+  sort: projectSort,
+  teamId: projectTeamId,
+  workspaceId: t.Optional(
+    t.Numeric({
+      minimum: 1,
+      multipleOf: 1,
+      description: 'Limit results to projects of this workspace.',
+    }),
+  ),
+  ids: t.Optional(
+    t.String({
+      pattern: '^[1-9][0-9]{0,8}(,[1-9][0-9]{0,8}){0,49}$',
+      description: 'Comma-separated project ids, up to 50, to limit results to.',
+    }),
+  ),
+  favorite: t.Optional(
+    t.String({ pattern: '^(true|false)$', description: 'Only the projects you starred, or not.' }),
+  ),
+  hidden: t.Optional(
+    t.String({ pattern: '^(true|false)$', description: 'Only the projects you hid, or not.' }),
+  ),
+  ...pageQueryFields,
 });
 
 // A project DTO (ProjectRow from the service).
@@ -63,7 +144,11 @@ export const ProjectResponse = t.Object({
   id: t.Number(),
   teamId: t.Number(),
   teamName: t.String(),
+  teamRef: t.String({ description: "The team's slug, or its id while it has none." }),
   key: t.String(),
+  ref: t.String({
+    description: "'<teamRef>.<key>': how routes containing {projectKey} name this project.",
+  }),
   name: t.String(),
   description: t.String(),
   mcpEnabled: t.Boolean(),
@@ -82,21 +167,36 @@ export const ProjectResponse = t.Object({
   timeEstimateEnabled: t.Boolean(),
   timeLoggingEnabled: t.Boolean(),
   availableFeatures: t.Array(t.UnionEnum([...PROJECT_FEATURES])),
+  archivedAt: t.Nullable(
+    t.String({ description: 'When the project was archived, or null while it is active.' }),
+  ),
   createdAt: t.String(),
 });
 
 // A project in the caller's list (ProjectListItem): ProjectRow plus the caller's
 // own role in it, and the caller's permission matrix when requested with
 // ?permissions=true.
-export const ProjectListResponse = t.Array(
-  t.Composite([
-    ProjectResponse,
-    t.Object({
-      role: t.Union([t.Literal('owner'), t.Literal('member')]),
-      permissions: t.Optional(PermissionMatrixSchema),
+const ProjectListItemResponse = t.Composite([
+  ProjectResponse,
+  t.Object({
+    role: t.Union([t.Literal('owner'), t.Literal('member')]),
+    via: AccessViaSchema,
+    lastActivityAt: t.Nullable(
+      t.String({
+        description: 'Newest readable work-item activity or comment timestamp, or null.',
+      }),
+    ),
+    isFavorite: t.Boolean({ description: 'Whether you starred this project.' }),
+    isHidden: t.Boolean({
+      description: 'Whether you hid this project in your navigation. Does not restrict access.',
     }),
-  ]),
-);
+    permissions: t.Optional(PermissionMatrixSchema),
+  }),
+]);
+
+export const ProjectListResponse = t.Array(ProjectListItemResponse);
+
+export const ProjectSearchPageResponse = pageResponse(ProjectListItemResponse);
 
 // An assignable candidate (AssigneeCandidate from members/service): a project
 // member or an AI agent's bot user.
@@ -109,6 +209,7 @@ const AssigneeCandidateResponse = t.Object({
   kind: t.Union([t.Literal('member'), t.Literal('agent')]),
   agentKind: t.Nullable(t.Union([t.Literal('external'), t.Literal('internal')])),
   restrictedToUserId: t.Nullable(t.String()),
+  respondsToMention: t.Nullable(t.Boolean()),
   canReadWorkItems: t.Boolean(),
 });
 
@@ -123,6 +224,9 @@ const ViewerResponse = t.Object({
   teamRole: t.Nullable(
     t.Union([t.Literal('owner'), t.Literal('manager'), t.Literal('member'), t.Literal('agent')]),
   ),
+  // 'workspace' when the caller is not a member of the project and reaches it through
+  // their role in the workspace that holds it.
+  via: AccessViaSchema,
 });
 
 // The project board scaffold (GET /projects/:projectKey): the project plus its
@@ -144,7 +248,7 @@ export const ProjectBoardResponse = t.Object({
 });
 
 // Which optional sections the project shows (ProjectFeatures from the service).
-const FeaturesResponse = t.Object({
+export const FeaturesResponse = t.Object({
   initiatives: t.Boolean(),
   dashboards: t.Boolean(),
   documents: t.Boolean(),

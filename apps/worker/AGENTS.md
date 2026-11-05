@@ -1,67 +1,45 @@
-# worker — rules
+# worker
 
-Webhook delivery worker: a standalone Bun process that drains the
-`webhook_delivery` queue and posts signed payloads to subscriber URLs. Runs as its
-own service (own Dockerfile), separate from `apps/api`. See root `AGENTS.md`.
-
-## What it does
-
-- Polls `webhook_delivery` for due `pending` rows, claims a batch with
-  `FOR UPDATE SKIP LOCKED`, posts each to its webhook URL, records the outcome.
-- Queues an `agent_run` row for every due `agent_schedule`.
-- Signs every request: `X-Itsaplan-Signature: t=<ts>,v1=<hmac-sha256>` over
-  `${ts}.${body}` with the webhook's `secret`. Plus `X-Itsaplan-Event`,
-  `X-Itsaplan-Delivery`, `X-Itsaplan-Event-Id` (stable across retries).
-- Retries transient failures (timeout, 429, 5xx) with equal-jitter exponential
-  backoff up to `WEBHOOK_MAX_ATTEMPTS`; permanent 4xx fail immediately. After
-  `WEBHOOK_DISABLE_THRESHOLD` consecutive failures the webhook is auto-disabled.
-- Drains `notification_delivery` and sends each row itself: email through
-  `@repo/mailer`, Telegram through the Bot API. The provider credentials are read
-  from the database and decrypted here (`notification-send.ts`), so the process
-  needs `APP_ENCRYPTION_KEY`.
+Standalone Bun process (own Dockerfile). `start.ts` runs three poll loops: `worker.ts` (webhook and
+notification delivery, webhook cleanup, telemetry), `agent-worker.ts` (cron schedules) and
+`import-worker.ts` (source imports). Webhook defaults are in `src/config.ts`; other settings are
+read with `intEnv` where they are used. The import pipeline: `docs/dev/import-worker.md`.
 
 ## Invariants
 
-- **Reads/writes `@repo/db` directly, never the API over HTTP.** It is a DB
-  consumer and an HTTP producer. It does not import `apps/api` and does not call it.
-- **Notification credentials are read, never taken from the caller.** A delivery
-  row names its project; the credentials come from the team that owns it and from
-  the instance config. Nothing about the recipient or the provider is passed in
-  from outside.
-- **No migrations here.** The api applies them on startup; the worker only uses
-  existing tables and tolerates their brief absence (a tick logs and retries).
-- **At-least-once delivery.** Duplicates are possible (a 2xx whose ACK is lost);
-  the `event_id` is stable across retries so receivers deduplicate. Never mint a
-  new id per attempt.
-- **Agent schedules are queued here, run in the api.** A due schedule gets an
-  `agent_run` row; the api drains that queue, where the agent runtime and the model
-  credentials live.
-- **Claim leases, not a status flag.** Claiming pushes `next_attempt_at` forward
-  by `WEBHOOK_LEASE_SECONDS`; a crashed delivery is reclaimed after the lease. Keep
-  the lease comfortably larger than `WEBHOOK_TIMEOUT_MS`.
-- **Pure logic stays dependency-free.** `backoff.ts`, `signature.ts`, and
-  `isRetryableStatus` import nothing from `@repo/db`, so unit tests run without a
-  database. Keep DB access in `store.ts`.
-
-## Config
-
-All via env with defaults (see `src/config.ts`): `WEBHOOK_POLL_INTERVAL_MS`,
-`WEBHOOK_BATCH_SIZE`, `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_MAX_ATTEMPTS`,
-`WEBHOOK_DISABLE_THRESHOLD`, `WEBHOOK_LEASE_SECONDS`, `WEBHOOK_CLEANUP_DAYS`,
-`WEBHOOK_CLEANUP_EVERY_TICKS`. Only `DATABASE_URL` is required for webhook
-delivery. Notification delivery also needs `APP_ENCRYPTION_KEY` (the same value the
-api uses) to read the stored provider credentials.
+- **Reads and writes `@repo/db` directly, never the API over HTTP.** It does not import `apps/api`.
+- **No migrations here.** Compose and Helm apply them in a separate step and the worker waits. On
+  Railway and a plain `docker run` the api applies them at startup, so the worker can start first.
+- **A DB error is retried and can use up attempts.** `poll-loop.ts` logs a failed claim and the next
+  tick retries. During a notification send or an import phase the error goes only to `last_error`
+  and counts as an attempt.
+- **Queued webhooks are at-least-once.** `event_id` is set at enqueue and sent in
+  `X-Itsaplan-Event-Id`, so receivers deduplicate. Never mint a new id per attempt. Notifications
+  have no `event_id`: a retry can send a duplicate.
+- **The worker queues cron schedules and runs no agent.** A due `cron` schedule of an active
+  project gets an `agent_run` row. The api queues the other runs and executes internal agents. A
+  runner or an invocation endpoint executes external ones.
+- **Claims use a lease; `status` stays `pending`.** A claim pushes `next_attempt_at` forward by
+  `WEBHOOK_LEASE_SECONDS`, `NOTIFICATION_LEASE_SECONDS`, or `LEASE_SECONDS` in `import-store.ts`.
+  Cron schedules use a row lock in a transaction instead.
+- **Keep `WEBHOOK_LEASE_SECONDS` above `WEBHOOK_TIMEOUT_MS`; no code checks it.** The timeout is a
+  socket idle timeout, so a receiver that keeps sending bytes can outlast the lease.
+- **Notification credentials are read, never taken from the caller.** A delivery row names its
+  project; credentials come from the owning team and the instance config.
+- **Always send a supplied URL through `pinnedFetch` from `@repo/net`, the SSRF guard.** That covers
+  webhook URLs, import source hosts and attachment links.
+- **Pure logic stays free of `@repo/db`.** `backoff.ts`, `reader.ts`, `*-adapter.ts` and
+  `*-mapping.ts` import nothing from it, so unit tests run without a database.
+- **An import job's credential is decrypted here, never routed through
+  `packages/db/src/domains/`.** Only the worker decrypts it.
+- A new import source needs a `SourceReader` adapter, an entry in `import-sources.ts`, api routes
+  and a web form. The phases do not change. Rewrite makes no requests to the source.
+- **Only `AttachmentRejectedError` is logged and skipped.** Any other attachment error fails the
+  tick, an SSRF refusal (`UrlNotAllowedError`) included. `MAX_ATTEMPTS` failed ticks in a row fail
+  the job (`import-retry.ts`).
 
 ## Tests
 
-`src/__tests__/unit/` covers the pure logic with no database. `src/__tests__/integration/`
-covers what needs one — the notification send reads its config from the database — and
-runs against the test DB (`bun run test` loads `.env.test`; the Docker gate runs it
-after the api and bot suites). It inserts the rows the api writes in production, the
-way `apps/bot` does; there is no api to call.
-
-## Run
-
-- Dev: `bun run dev` at the repo root runs it under turbo alongside api + web
-  (watch mode, loads root `.env`).
-- Prod: the `worker` service in `docker-compose.yml`.
+`src/__tests__/unit/` covers pure logic with no database. `src/__tests__/integration/` runs against
+the test DB, and `import-store.test.ts` also uses the S3 test store. These tests insert the rows the
+api writes in production; there is no api to call.
